@@ -10,11 +10,22 @@ load_dotenv()
 # Initialize Firebase Admin if not already initialized
 if not firebase_admin._apps:
     try:
+        # Get the private key from environment and properly format it
+        private_key = os.getenv("FIREBASE_PRIVATE_KEY")
+        if private_key:
+            # Handle escaped newlines if they exist
+            private_key = private_key.replace('\\n', '\n')
+            # Ensure the key has proper BEGIN/END PRIVATE KEY markers
+            if not private_key.strip().startswith('-----BEGIN PRIVATE KEY-----'):
+                private_key = '-----BEGIN PRIVATE KEY-----\n' + private_key
+            if not private_key.strip().endswith('-----END PRIVATE KEY-----'):
+                private_key = private_key + '\n-----END PRIVATE KEY-----'
+        
         firebase_config = {
             "type": "service_account",
             "project_id": os.getenv("FIREBASE_PROJECT_ID"),
             "private_key_id": os.getenv("FIREBASE_PRIVATE_KEY_ID"),
-            "private_key": os.getenv("FIREBASE_PRIVATE_KEY").replace('\\n', '\n'),
+            "private_key": private_key,
             "client_email": os.getenv("FIREBASE_CLIENT_EMAIL"),
             "client_id": os.getenv("FIREBASE_CLIENT_ID"),
             "auth_uri": "https://accounts.google.com/o/oauth2/auth",
