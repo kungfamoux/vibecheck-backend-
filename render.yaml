@@ -2,11 +2,14 @@ services:
   - type: web
     name: recommend-backend
     env: python
-    buildCommand: chmod a+x start.sh && pip install -r requirements.txt
+    buildCommand: |
+      python -m pip install --upgrade pip setuptools wheel
+      pip install -r requirements.txt
+      chmod a+x start.sh
     startCommand: ./start.sh
     envVars:
       - key: PORT
         value: 10000
       - key: PYTHON_VERSION
-        value: 3.9.0
+        value: 3.9.18
     plan: free
