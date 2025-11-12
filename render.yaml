@@ -3,7 +3,10 @@ services:
     name: recommend-backend
     env: python
     buildCommand: |
-      python -m pip install --upgrade pip setuptools wheel
+      python3.9 -m venv venv
+      . venv/bin/activate
+      python -m pip install --upgrade pip==22.3.1
+      pip install setuptools==65.5.1 wheel==0.40.0
       pip install -r requirements.txt
       chmod a+x start.sh
     startCommand: ./start.sh
@@ -12,4 +15,6 @@ services:
         value: 10000
       - key: PYTHON_VERSION
         value: 3.9.18
+      - key: PYTHONPATH
+        value: /opt/render/project/src
     plan: free
