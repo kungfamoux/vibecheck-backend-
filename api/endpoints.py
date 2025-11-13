@@ -71,7 +71,7 @@ async def login(login_data: dict = Body(...)):
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-@router.post("/content/{content_id}/comment", response_model=schemas.Sentiment)
+@router.post("/contents/{content_id}/comments", response_model=schemas.Sentiment, status_code=status.HTTP_201_CREATED)
 async def add_comment(
     content_id: str,
     comment_data: schemas.SentimentCreate,
@@ -89,50 +89,84 @@ async def add_comment(
         from models.database import db
         from datetime import datetime
         
+        # Verify content exists
+        content_ref = db.collection("contents").document(content_id)
+        if not content_ref.get().exists:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Content with ID {content_id} not found"
+            )
+        
         # Analyze the sentiment of the comment
         sentiment_analysis = ml_service.analyze_content_feedback(comment_data.user_comment)
         
-        # Create the sentiment document
-        sentiment_data = {
+        # Create the comment document
+        comment_data = {
             "user_id": current_user.uid,
+            "user_email": current_user.email,
             "content_id": content_id,
-            "user_comment": comment_data.user_comment,
-            "sentiment_score": sentiment_analysis["sentiment_score"],
-            "sentiment_label": sentiment_analysis["sentiment_label"],
-            "created_at": datetime.utcnow()
+            "comment": comment_data.user_comment,
+            "sentiment_score": float(sentiment_analysis.get("sentiment_score", 0.0)),
+            "sentiment_label": sentiment_analysis.get("sentiment_label", "neutral"),
+            "created_at": datetime.utcnow().isoformat(),
+            "updated_at": datetime.utcnow().isoformat()
         }
         
         # Save to Firestore
-        doc_ref = db.collection("sentiment").document()
-        doc_ref.set(sentiment_data)
+        doc_ref = db.collection("comments").document()
+        doc_ref.set(comment_data)
         
-        # Return the created sentiment with the generated ID
-        sentiment_data["sentiment_id"] = doc_ref.id
-        return sentiment_data
+        # Update content's comment count
+        content_ref.update({
+            "comment_count": firestore.Increment(1),
+            "updated_at": datetime.utcnow().isoformat()
+        })
         
+        # Return the created comment with the generated ID
+        return {
+            "comment_id": doc_ref.id,
+            "content_id": content_id,
+            "user_id": current_user.uid,
+            "comment": comment_data["comment"],
+            "sentiment_score": comment_data["sentiment_score"],
+            "sentiment_label": comment_data["sentiment_label"],
+            "created_at": comment_data["created_at"]
+        }
+        
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Error adding comment: {e}")
+        logger.error(f"Error adding comment: {str(e)}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to add comment"
+            detail="An error occurred while adding the comment"
         )
 
-@router.post("/recommendations/query", response_model=List[schemas.RecommendationResponse])
+@router.post("/recommendations", response_model=List[schemas.RecommendationResponse])
 async def get_recommendations(
     query: schemas.RecommendationQuery,
     current_user: UserRecord = Depends(get_current_user)
 ):
     """
-    Get content recommendations based on user input text
+    Get personalized content recommendations based on user input text and preferences
     
+    Request body should contain:
     - **user_text**: The user's input text to analyze for mood and preferences
     
     Returns a list of recommended content items with match scores
     """
     try:
+        if not query.user_text or not query.user_text.strip():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="user_text is required in the request body"
+            )
+            
+        logger.info(f"Getting recommendations for user {current_user.uid} based on text: {query.user_text[:100]}...")
+        
         # Analyze the user's text to get mood tags
         mood_tags_with_scores = ml_service.predict_content_tags(query.user_text)
-        mood_tags = [tag for tag, score in mood_tags_with_scores]
+        mood_tags = [tag for tag, score in mood_tags_with_scores if score > 0.3]  # Filter out low confidence tags
         
         if not mood_tags:
             # Default to some general tags if no specific mood is detected
@@ -144,16 +178,34 @@ async def get_recommendations(
         recommendations = await recommendation_engine.get_recommendations(
             mood_tags=mood_tags,
             limit=10,
-            user_id=current_user.uid
+            user_id=current_user.uid,
+            user_text=query.user_text
         )
+        
+        # Log the recommendation request for future personalization
+        try:
+            from models.database import db
+            from datetime import datetime
+            
+            db.collection("recommendation_requests").add({
+                "user_id": current_user.uid,
+                "user_text": query.user_text,
+                "mood_tags": mood_tags,
+                "recommendation_count": len(recommendations),
+                "created_at": datetime.utcnow().isoformat()
+            })
+        except Exception as e:
+            logger.warning(f"Failed to log recommendation request: {e}")
         
         return recommendations
         
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Error getting recommendations: {e}")
+        logger.error(f"Error getting recommendations: {str(e)}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to generate recommendations"
+            detail="An error occurred while generating recommendations"
         )
 
 # Health check endpoint
