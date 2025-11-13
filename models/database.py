@@ -4,61 +4,45 @@ import json
 from firebase_admin import credentials, firestore, db as firebase_db, auth
 from dotenv import load_dotenv
 
-def get_firebase_credentials():
-    """Get and validate Firebase credentials from environment variables."""
-    private_key = os.getenv("FIREBASE_PRIVATE_KEY", "").strip()
-    
-    if not private_key:
-        raise ValueError("FIREBASE_PRIVATE_KEY environment variable is not set")
-    
-    # Handle the private key format
-    if '\n' not in private_key and '-----' not in private_key:
-        # If the key is all on one line without markers, try to format it
-        private_key = private_key.replace('\\n', '\n')  # Handle escaped newlines
-    
-    # Ensure proper PEM format
-    if not private_key.startswith('-----BEGIN PRIVATE KEY-----'):
-        private_key = '-----BEGIN PRIVATE KEY-----\n' + private_key
-    if not private_key.endswith('-----END PRIVATE KEY-----'):
-        private_key = private_key + '\n-----END PRIVATE KEY-----'
-    
-    firebase_config = {
-        "type": "service_account",
-        "project_id": os.getenv("FIREBASE_PROJECT_ID"),
-        "private_key_id": os.getenv("FIREBASE_PRIVATE_KEY_ID"),
-        "private_key": private_key,
-        "client_email": os.getenv("FIREBASE_CLIENT_EMAIL"),
-        "client_id": os.getenv("FIREBASE_CLIENT_ID"),
-        "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-        "token_uri": "https://oauth2.googleapis.com/token",
-        "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
-        "client_x509_cert_url": os.getenv("FIREBASE_CLIENT_CERT_URL"),
-        "universe_domain": "googleapis.com"
-    }
-    
-    # Verify all required fields are present
-    required_fields = ["project_id", "private_key_id", "private_key", "client_email", "client_id", "client_x509_cert_url"]
-    missing_fields = [field for field in required_fields if not firebase_config.get(field)]
-    
-    if missing_fields:
-        raise ValueError(f"Missing required Firebase config fields: {', '.join(missing_fields)}")
-    
-    return firebase_config
-
 # Load environment variables
 load_dotenv()
 
 # Initialize Firebase Admin if not already initialized
 if not firebase_admin._apps:
     try:
-        firebase_config = get_firebase_credentials()
+        # Get required environment variables
+        firebase_config = {
+            "type": "service_account",
+            "project_id": os.getenv("FIREBASE_PROJECT_ID"),
+            "private_key_id": os.getenv("FIREBASE_PRIVATE_KEY_ID"),
+            "private_key": os.getenv("FIREBASE_PRIVATE_KEY").replace('\\n', '\n'),
+            "client_email": os.getenv("FIREBASE_CLIENT_EMAIL"),
+            "client_id": os.getenv("FIREBASE_CLIENT_ID"),
+            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+            "token_uri": "https://oauth2.googleapis.com/token",
+            "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+            "client_x509_cert_url": os.getenv("FIREBASE_CLIENT_CERT_URL"),
+            "universe_domain": "googleapis.com"
+        }
+
+        # Verify required fields
+        required_fields = ["project_id", "private_key", "client_email"]
+        missing_fields = [field for field in required_fields if not firebase_config.get(field)]
+        
+        if missing_fields:
+            raise ValueError(f"Missing required Firebase config fields: {', '.join(missing_fields)}")
+
+        # Initialize Firebase
         cred = credentials.Certificate(firebase_config)
         firebase_admin.initialize_app(cred, {
             'databaseURL': 'https://recommend-16f0e-default-rtdb.firebaseio.com/'
         })
         print("Firebase Admin SDK initialized successfully")
+        
     except Exception as e:
-        print(f"Error initializing Firebase Admin: {e}")
+        print(f"Error initializing Firebase Admin: {str(e)}")
+        print("Firebase configuration:", {k: v[:50] + '...' if isinstance(v, str) and len(v) > 50 else v 
+                                       for k, v in firebase_config.items() if k != 'private_key'})
         raise
 
 # Get Firestore client
