@@ -964,14 +964,14 @@ class MoodBasedRecommender:
             return []
 
 # Create a global instance of the recommendation engine
-recommendation_engine = RecommendationEngine()
+recommendation_engine = MoodBasedRecommender()
 
 # Example usage:
 if __name__ == "__main__":
     import asyncio
     
     async def test_recommendations():
-        engine = RecommendationEngine()
+        engine = MoodBasedRecommender()
         
         # Test content-based recommendations
         print("\nTesting content-based recommendations...")
