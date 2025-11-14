@@ -1,19 +1,9 @@
-from typing import List, Dict, Any, Optional, Tuple, Union
-import pandas as pd
-import numpy as np
-from datetime import datetime, timedelta
-from sklearn.metrics.pairwise import cosine_similarity, linear_kernel
-from sklearn.feature_extraction.text import TfidfVectorizer, CountVectorizer
-from sklearn.decomposition import LatentDirichletAllocation
+from typing import List, Dict, Any
+from sklearn.metrics.pairwise import cosine_similarity
+from sklearn.feature_extraction.text import TfidfVectorizer
 import logging
-import json
-import os
-from collections import defaultdict, Counter
-
-# Import ML service
 from .ml_service import ml_service
-from models.database import content_ref, interactions_ref, user_profiles_ref, get_sentiment_rtd
-from models.schemas import RecommendationResponse, ContentItem, UserInteraction
+from models.database import content_ref
 
 # Initialize logger
 logging.basicConfig(level=logging.INFO)
@@ -173,103 +163,48 @@ class UserProfileManager:
         return {}
 
 
-class RecommendationEngine:
+class MoodBasedRecommender:
     """
-    Advanced Recommendation Engine that provides content recommendations based on:
-    1. Content-based filtering with advanced text analysis
-    2. Collaborative filtering with user similarity
-    3. Sentiment-aware recommendations
-    4. Context-aware recommendations (time, location, device)
-    5. Hybrid approach combining multiple strategies
+    A simple recommendation engine that suggests content based on mood.
+    Uses text analysis to find content that matches the user's current mood.
     """
     
     def __init__(self):
-        # Content cache and analysis
         self.content_cache = {}
-        self.content_embeddings = {}
-        self.content_features = {}
-        self.last_cache_update = None
-        self.cache_ttl = 3600  # 1 hour cache TTL
-        
-        # User data
-        self.user_interactions = {}
-        self.user_similarity = {}
-        
-        # Initialize analyzers
-        self.content_analyzer = ContentAnalyzer()
-        self.user_profile_manager = UserProfileManager()
-        
-        # Initialize vectorizers and models
-        self.tfidf_vectorizer = TfidfVectorizer(
+        self.vectorizer = TfidfVectorizer(
             stop_words='english',
             ngram_range=(1, 2),
-            max_features=10000
+            max_features=5000
         )
-        
-        self.similarity_matrix = None
-        
-        logger.info("Advanced RecommendationEngine initialized")
+        self.content_embeddings = None
+        logger.info("MoodBasedRecommender initialized")
     
     async def _refresh_content_cache(self):
-        """Refresh the content cache and precompute features if stale."""
-        current_time = datetime.utcnow()
-        
-        if (self.last_cache_update is None or 
-            (current_time - self.last_cache_update).total_seconds() > self.cache_ttl):
+        """Load and process content from the database."""
+        try:
+            content_docs = content_ref.stream()
+            self.content_cache = {
+                doc.id: {**doc.to_dict(), 'content_id': doc.id}
+                for doc in content_docs
+            }
             
-            logger.info("Refreshing content cache and computing features...")
-            try:
-                # Fetch all content from Firestore
-                content_docs = content_ref.stream()
-                
-                # Convert to dictionary with content_id as key and extract features
-                self.content_cache = {}
-                content_texts = []
-                
-                for doc in content_docs:
-                    content_data = doc.to_dict()
-                    content_id = doc.id
-                    content_data['content_id'] = content_id
-                    self.content_cache[content_id] = content_data
-                    
-                    # Prepare text for TF-IDF and topic modeling
-                    text = f"{content_data.get('title', '')} {content_data.get('description', '')} " \
-                          f"{' '.join(content_data.get('tags', []))}"
-                    content_texts.append(text)
-                
-                # Update TF-IDF vectorizer and compute document-term matrix
-                if content_texts:
-                    tfidf_matrix = self.tfidf_vectorizer.fit_transform(content_texts)
-                    
-                    # Compute similarity matrix
-                    self.similarity_matrix = linear_kernel(tfidf_matrix, tfidf_matrix)
-                    
-                    # Train LDA model for topic modeling
-                    count_matrix = self.content_analyzer.count_vectorizer.fit_transform(content_texts)
-                    self.content_analyzer.lda = LatentDirichletAllocation(
-                        n_components=self.content_analyzer.n_topics,
-                        max_iter=10,
-                        learning_method='online',
-                        random_state=42
-                    )
-                    self.content_analyzer.lda.fit(count_matrix)
-                    
-                    # Extract and store content features
-                    for content_id, text in zip(self.content_cache.keys(), content_texts):
-                        self.content_features[content_id] = self.content_analyzer.extract_content_features(
-                            self.content_cache[content_id]
-                        )
-                
-                self.last_cache_update = current_time
-                logger.info(
-                    f"Content cache refreshed with {len(self.content_cache)} items. "
-                    f"Similarity matrix shape: {getattr(self.similarity_matrix, 'shape', 'N/A')}"
-                )
-                
-            except Exception as e:
-                logger.error(f"Error refreshing content cache: {e}", exc_info=True)
-                if not self.content_cache:
-                    raise
+            # Prepare text for vectorization
+            content_texts = [
+                f"{content.get('title', '')} {content.get('description', '')} "
+                f"{' '.join(content.get('tags', []))}"
+                for content in self.content_cache.values()
+            ]
+            
+            # Create TF-IDF vectors
+            if content_texts:
+                self.content_embeddings = self.vectorizer.fit_transform(content_texts)
+            
+            logger.info(f"Loaded {len(self.content_cache)} content items")
+            
+        except Exception as e:
+            logger.error(f"Error refreshing content cache: {e}")
+            self.content_cache = {}
+            self.content_embeddings = None
     
     async def _compute_content_embeddings(self):
         """Compute TF-IDF embeddings for all content items."""
@@ -298,93 +233,62 @@ class RecommendationEngine:
             logger.error(f"Error computing content embeddings: {e}")
             self.content_embeddings = {}
     
-    async def _get_similar_content(
+    async def get_similar_mood_content(
         self, 
-        content_id: str, 
-        top_n: int = 5,
-        similarity_threshold: float = 0.2
+        mood: str,
+        top_n: int = 5
     ) -> List[Dict[str, Any]]:
         """
-        Find similar content items using advanced content-based filtering.
+        Find content that matches a specific mood.
         
         Args:
-            content_id: ID of the reference content
-            top_n: Maximum number of similar items to return
-            similarity_threshold: Minimum similarity score (0-1) for inclusion
+            mood: The target mood to match (e.g., 'happy', 'calm', 'energetic')
+            top_n: Number of items to return
             
         Returns:
-            List of similar content items with similarity scores and match reasons
+            List of content items with mood match scores
         """
-        if content_id not in self.content_cache:
-            logger.warning(f"Content ID {content_id} not found in cache")
-            return []
-            
         try:
-            ref_content = self.content_cache[content_id]
-            ref_features = self.content_features.get(content_id, {})
+            if not self.content_cache:
+                await self._refresh_content_cache()
+                
+            if not self.content_cache:
+                return []
             
-            similarities = []
+            # Analyze mood for all content
+            mood_scores = []
             
-            for other_id, other_content in self.content_cache.items():
-                if other_id == content_id:
-                    continue
-                    
-                other_features = self.content_features.get(other_id, {})
+            for content_id, content in self.content_cache.items():
+                # Get text content
+                text = f"{content.get('title', '')} {content.get('description', '')}"
                 
-                # Calculate multiple similarity scores
-                similarity_scores = {
-                    'content': self._calculate_content_similarity(content_id, other_id),
-                    'topics': self._calculate_topic_similarity(ref_features, other_features),
-                    'sentiment': self._calculate_sentiment_similarity(ref_features, other_features),
-                    'moods': self._calculate_mood_similarity(ref_features, other_features)
-                }
-                
-                # Calculate weighted overall similarity
-                weights = {
-                    'content': 0.4,
-                    'topics': 0.3,
-                    'sentiment': 0.2,
-                    'moods': 0.1
-                }
-                
-                overall_similarity = sum(
-                    score * weights.get(feature, 0) 
-                    for feature, score in similarity_scores.items()
+                # Analyze mood
+                analysis = ml_service.analyze_content(text)
+                content_mood = next(
+                    (m['mood'] for m in analysis.get('moods', []) if m['mood'].lower() == mood.lower()),
+                    None
                 )
                 
-                if overall_similarity >= similarity_threshold:
-                    similarities.append((other_id, overall_similarity, similarity_scores))
+                if content_mood:
+                    mood_scores.append((content_id, 1.0))
             
-            # Sort by overall similarity and get top N
-            similarities.sort(key=lambda x: x[1], reverse=True)
+            # Sort by mood match score
+            mood_scores.sort(key=lambda x: x[1], reverse=True)
             
-            # Prepare results with explanation
+            # Get top N matches
             results = []
-            for other_id, score, scores in similarities[:top_n]:
-                # Get top 2 matching aspects
-                top_aspects = sorted(
-                    scores.items(), 
-                    key=lambda x: x[1], 
-                    reverse=True
-                )[:2]
-                
-                match_reasons = [
-                    f"{aspect} ({similarity:.0%} match)" 
-                    for aspect, similarity in top_aspects 
-                    if similarity > 0
-                ]
-                
+            for content_id, score in mood_scores[:top_n]:
                 results.append({
-                    **self.content_cache[other_id],
-                    'content_id': other_id,
-                    'similarity_score': score,
-                    'match_reasons': match_reasons or ["Content may be relevant"]
+                    **self.content_cache[content_id],
+                    'content_id': content_id,
+                    'mood_match_score': score,
+                    'explanation': f"Matches mood: {mood}"
                 })
-            
+                
             return results
             
         except Exception as e:
-            logger.error(f"Error finding similar content: {e}", exc_info=True)
+            logger.error(f"Error finding mood-matching content: {e}")
             return []
     
     def _calculate_content_similarity(self, content_id1: str, content_id2: str) -> float:
@@ -456,117 +360,6 @@ class RecommendationEngine:
             
         content = self.content_cache[content_id]
         return f"{content.get('title', '')} {content.get('description', '')} {' '.join(content.get('tags', []))}"
-    
-    async def get_content_based_recommendations(
-        self, 
-        user_id: str, 
-        top_n: int = 5,
-        diversity: float = 0.3,
-        freshness_weight: float = 0.2
-    ) -> List[Dict[str, Any]]:
-        """
-        Get advanced content-based recommendations for a user with diversity and freshness.
-        
-        Args:
-            user_id: ID of the user
-            top_n: Number of recommendations to return
-            diversity: Controls diversity of recommendations (0-1)
-            freshness_weight: Weight for content freshness (0-1)
-            
-        Returns:
-            List of recommended content items with explanations
-        """
-        try:
-            # Ensure cache is up to date
-            await self._refresh_content_cache()
-            
-            # Get user's interaction history
-            user_history = await self._get_user_interactions(user_id)
-            
-            if not user_history:
-                return self._get_fallback_recommendations(top_n)
-            
-            # Get content IDs from user history with weights
-            content_weights = self._calculate_content_weights(user_history)
-            
-            # Get user preferences
-            user_prefs = self.user_profile_manager.get_user_preferences(user_id)
-            
-            # Score all content based on multiple factors
-            scored_content = []
-            
-            for content_id, content in self.content_cache.items():
-                # Skip content already seen by user
-                if content_id in content_weights:
-                    continue
-                    
-                # Calculate base score from similar content in history
-                content_sim_scores = []
-                for hist_id, weight in content_weights.items():
-                    similarity = self._calculate_content_similarity(content_id, hist_id)
-                    content_sim_scores.append(similarity * weight)
-                
-                content_score = sum(content_sim_scores) / len(content_sim_scores) if content_sim_scores else 0
-                
-                # Calculate preference match score
-                pref_score = self._calculate_preference_match(content_id, user_prefs)
-                
-                # Calculate freshness score (newer content gets higher score)
-                freshness_score = self._calculate_freshness_score(content)
-                
-                # Combine scores with weights
-                combined_score = (
-                    (1.0 - freshness_weight) * (content_score * 0.7 + pref_score * 0.3) +
-                    freshness_weight * freshness_score
-                )
-                
-                scored_content.append({
-                    'content_id': content_id,
-                    'content': content,
-                    'score': combined_score,
-                    'content_score': content_score,
-                    'pref_score': pref_score,
-                    'freshness_score': freshness_score
-                })
-            
-            # Sort by combined score
-            scored_content.sort(key=lambda x: x['score'], reverse=True)
-            
-            # Apply diversity to avoid too similar recommendations
-            selected = []
-            selected_ids = set()
-            
-            for item in scored_content:
-                if len(selected) >= top_n * 2:  # Get extra candidates for diversity selection
-                    break
-                    
-                # Skip if too similar to already selected items
-                if not self._is_diverse_enough(item, selected, diversity):
-                    continue
-                    
-                selected.append(item)
-                selected_ids.add(item['content_id'])
-            
-            # Select top N diverse items
-            final_selection = []
-            for item in selected:
-                if len(final_selection) >= top_n:
-                    break
-                    
-                # Add explanation for the recommendation
-                explanation = self._generate_recommendation_explanation(item, user_prefs)
-                final_selection.append({
-                    **item['content'],
-                    'recommendation_score': item['score'],
-                    'explanation': explanation,
-                    'content_id': item['content_id']
-                })
-            
-            return final_selection
-            
-        except Exception as e:
-            logger.error(f"Error in content-based recommendations: {e}", exc_info=True)
-            return self._get_fallback_recommendations(top_n)
     
     def _calculate_content_weights(self, user_history: List[Dict[str, Any]]) -> Dict[str, float]:
         """Calculate weights for user's historical content interactions."""

@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Body
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from pydantic import BaseModel
 import firebase_admin
 from firebase_admin import auth
@@ -208,8 +208,48 @@ async def get_recommendations(
             detail="An error occurred while generating recommendations"
         )
 
+@router.post("/analyze/mood", response_model=schemas.MoodAnalysis)
+async def analyze_mood(
+    request: schemas.TextMoodRequest,
+    current_user: UserRecord = Depends(get_current_user)
+):
+    """
+    Analyze text to detect mood and sentiment
+    
+    - **text**: The input text to analyze
+    - **analyze_transitions**: Whether to analyze mood changes in the text (for longer texts)
+    
+    Returns mood analysis including:
+    - primary_mood: The most dominant mood
+    - confidence: Confidence score (0-1)
+    - sentiment: Overall sentiment
+    - mood_breakdown: All detected moods with scores
+    - mood_transitions: (if analyze_transitions=True) Mood changes in the text
+    """
+    try:
+        # Use the ML service to detect mood
+        mood_analysis = ml_service.detect_mood(
+            text=request.text,
+            analyze_transitions=request.analyze_transitions
+        )
+        
+        # Convert the mood analysis to the response model
+        return {
+            "primary_mood": mood_analysis.get("primary_mood", "neutral"),
+            "confidence": mood_analysis.get("confidence", 0.0),
+            "sentiment": mood_analysis.get("sentiment", "neutral"),
+            "mood_breakdown": mood_analysis.get("mood_breakdown", {}),
+            "mood_transitions": mood_analysis.get("mood_transitions", []) if request.analyze_transitions else None
+        }
+        
+    except Exception as e:
+        logger.error(f"Error analyzing mood: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Error analyzing mood"
+        )
+
 # Health check endpoint
-@router.get("/health")
+@router.get("/health", status_code=status.HTTP_200_OK)
 async def health_check():
-    """Health check endpoint"""
     return {"status": "healthy"}

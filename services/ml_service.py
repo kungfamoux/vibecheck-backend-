@@ -85,18 +85,21 @@ class MLService:
         self.analyzer = TextAnalyzer()
         self.stop_words = set(stopwords.words('english'))
         
-        # Initialize vectorizers
+        # Initialize NLTK resources
+        try:
+            download_nltk_data()
+        except Exception as e:
+            logger.warning(f"Could not download NLTK data: {e}")
+            
+        self.lemmatizer = WordNetLemmatizer()
+        self.stemmer = PorterStemmer()
+        self.stop_words = set(stopwords.words('english'))
+        
+        # Initialize TF-IDF vectorizer
         self.tfidf_vectorizer = TfidfVectorizer(
             stop_words='english',
             ngram_range=(1, 2),
-            max_features=5000
-        )
-        
-        self.count_vectorizer = CountVectorizer(
-            max_df=0.95, 
-            min_df=2,
-            stop_words='english',
-            ngram_range=(1, 2)
+            max_features=10000
         )
         
         # Initialize topic model (LDA)
@@ -106,70 +109,31 @@ class MLService:
         # Sentiment analyzer
         self.sia = SentimentIntensityAnalyzer()
         
+        # Emoji and slang support
+        self.emoji_pattern = re.compile("["
+            u"\U0001F600-\U0001F64F"  # emoticons
+            u"\U0001F300-\U0001F5FF"  # symbols & pictographs
+            u"\U0001F680-\U0001F6FF"  # transport & map symbols
+            u"\U0001F1E0-\U0001F1FF"  # flags (iOS)
+            "]+", flags=re.UNICODE)
+            
+        # Common slang and their meanings
+        self.slang_mapping = {
+            'lol': 'laughing out loud', 'lmao': 'laughing my ass off',
+            'rofl': 'rolling on the floor laughing', 'omg': 'oh my god',
+            'btw': 'by the way', 'idk': "i don't know", 'tbh': 'to be honest',
+            'imo': 'in my opinion', 'smh': 'shaking my head', 'fyi': 'for your information',
+            'rn': 'right now', 'ikr': 'i know right', 'tbh': 'to be honest',
+            'idc': "i don't care", 'omw': 'on my way', 'nvm': 'never mind',
+            'thx': 'thanks', 'pls': 'please', 'u': 'you', 'r': 'are',
+            'ur': 'your', 'y': 'why', '4': 'for', '2': 'to', 'b': 'be'
+        }
+        
         # Content categories and mood detection
         self.content_categories = [
             'technology', 'sports', 'entertainment', 'politics', 
             'health', 'science', 'business', 'education'
         ]
-        
-        self.mood_categories = [
-            'happy', 'sad', 'angry', 'excited', 'relaxed', 
-            'adventurous', 'romantic', 'mysterious', 'thrilling', 'inspiring'
-        ]
-        
-        # Enhanced keyword mapping with weights and categories
-        self.mood_keywords = {
-            'happy': {
-                'keywords': ['happy', 'joy', 'excited', 'great', 'wonderful', 'amazing', 'delighted'],
-                'weight': 1.0,
-                'category': 'positive_emotion'
-            },
-            'sad': {
-                'keywords': ['sad', 'unhappy', 'depressed', 'miserable', 'heartbroken', 'sorrow'],
-                'weight': 1.0,
-                'category': 'negative_emotion'
-            },
-            'angry': {
-                'keywords': ['angry', 'mad', 'furious', 'annoyed', 'irritated', 'outraged'],
-                'weight': 1.0,
-                'category': 'negative_emotion'
-            },
-            'excited': {
-                'keywords': ['excited', 'thrilled', 'pumped', 'eager', 'enthusiastic', 'ecstatic'],
-                'weight': 1.0,
-                'category': 'positive_emotion'
-            },
-            'relaxed': {
-                'keywords': ['relaxed', 'calm', 'peaceful', 'serene', 'chill', 'tranquil'],
-                'weight': 0.9,
-                'category': 'calm_emotion'
-            },
-            'adventurous': {
-                'keywords': ['adventure', 'explore', 'thrill', 'daring', 'bold', 'daredevil'],
-                'weight': 0.9,
-                'category': 'activity'
-            },
-            'romantic': {
-                'keywords': ['romantic', 'love', 'passion', 'affection', 'intimate', 'loving'],
-                'weight': 0.9,
-                'category': 'relationship'
-            },
-            'mysterious': {
-                'keywords': ['mystery', 'suspense', 'enigma', 'puzzle', 'secret', 'cryptic'],
-                'weight': 0.8,
-                'category': 'tone'
-            },
-            'thrilling': {
-                'keywords': ['thrill', 'excitement', 'adrenaline', 'intense', 'gripping', 'electrifying'],
-                'weight': 0.8,
-                'category': 'intensity'
-            },
-            'inspiring': {
-                'keywords': ['inspire', 'motivate', 'empower', 'encourage', 'uplift', 'inspirational'],
-                'weight': 1.0,
-                'category': 'positive_emotion'
-            }
-        }
         
         # Initialize sentiment analyzer (TextBlob as base, can be extended with more advanced models)
         self.sentiment_analyzer = TextBlob
@@ -180,26 +144,35 @@ class MLService:
         
         logger.info("MLService initialized")
     
-    def preprocess_text(self, text: str, remove_stopwords: bool = True, 
-                       lemmatize: bool = True, remove_punctuation: bool = True) -> List[str]:
+    def preprocess_text(self, text: str, handle_emojis: bool = True, handle_slang: bool = True) -> List[str]:
         """
-        Advanced text preprocessing for analysis.
+        Preprocess text with support for emojis and slang.
         
         Args:
             text: Input text to preprocess
-            remove_stopwords: Whether to remove stopwords
-            lemmatize: Whether to lemmatize words
-            remove_punctuation: Whether to remove punctuation
+            handle_emojis: Whether to process emojis
+            handle_slang: Whether to expand slang terms
             
         Returns:
             List of preprocessed tokens
         """
-        if not text or not isinstance(text, str):
+        if not text:
             return []
             
         try:
             # Convert to lowercase
             text = text.lower()
+            
+            # Handle emojis
+            if handle_emojis:
+                # Replace emojis with their text descriptions
+                text = emoji.demojize(text, delimiters=(' ', ' '))
+            
+            # Handle common slang
+            if handle_slang:
+                words = text.split()
+                expanded_words = [self.slang_mapping.get(word, word) for word in words]
+                text = ' '.join(expanded_words)
             
             # Remove URLs
             text = re.sub(r'https?://\S+|www\.\S+', '', text)
@@ -207,28 +180,18 @@ class MLService:
             # Remove HTML tags
             text = re.sub(r'<.*?>', '', text)
             
-            # Remove punctuation
-            if remove_punctuation:
-                text = text.translate(str.maketrans('', '', string.punctuation))
-            
-            # Remove numbers
-            text = re.sub(r'\d+', '', text)
+            # Remove special characters but keep apostrophes for contractions
+            text = re.sub(r'[^\w\s\']', ' ', text)
             
             # Tokenize
             tokens = word_tokenize(text)
             
-            # Remove stopwords if needed
-            if remove_stopwords:
-                tokens = [word for word in tokens if word not in self.stop_words]
-            
-            # Lemmatization with POS tagging
-            if lemmatize:
-                tokens = [self.analyzer.lemmatizer.lemmatize(
-                    word, self.analyzer._get_wordnet_pos(word)
-                ) for word in tokens]
-            
-            # Remove short tokens (length < 2)
-            tokens = [word for word in tokens if len(word) > 1]
+            # Remove stopwords and short tokens, and lemmatize
+            tokens = [
+                self.lemmatizer.lemmatize(token) 
+                for token in tokens 
+                if token not in self.stop_words and len(token) > 2 and not token.isdigit()
+            ]
             
             return tokens
             
@@ -310,53 +273,126 @@ class MLService:
                 'error': str(e)
             }
     
-    def detect_mood(self, text: str, top_n: int = 3) -> List[Dict[str, float]]:
+    def detect_mood(self, text: str, analyze_transitions: bool = False) -> Dict[str, Any]:
         """
-        Detect the mood of a given text based on keyword matching.
+        Analyze text and detect the most prominent mood with supporting details.
+        Supports emojis, slang, and mood transitions in longer texts.
         
         Args:
             text: Input text to analyze
-            top_n: Number of top moods to return
+            analyze_transitions: Whether to analyze mood changes in longer texts
             
         Returns:
-            List of dictionaries with mood and confidence score
+            Dictionary containing:
+            - primary_mood: The most dominant mood detected
+            - confidence: Confidence score (0-1)
+            - mood_breakdown: All detected moods with their scores
+            - sentiment: Overall sentiment of the text
+            - mood_transitions: (if analyze_transitions=True) List of mood changes in text
         """
         try:
-            if not text or not isinstance(text, str):
-                return []
-                
-            # Preprocess text
-            tokens = self.preprocess_text(text, remove_stopwords=True)
-            text_str = ' '.join(tokens)
+            if not text or not text.strip():
+                return {
+                    'primary_mood': 'neutral',
+                    'confidence': 0.0,
+                    'mood_breakdown': {},
+                    'sentiment': 'neutral'
+                }
             
-            # Calculate scores for each mood category
-            mood_scores = []
+            # Handle emojis and slang in preprocessing
+            tokens = self.preprocess_text(text, handle_emojis=True, handle_slang=True)
             
-            for mood, data in self.mood_keywords.items():
-                keywords = data['keywords']
-                weight = data['weight']
-                
-                # Count keyword matches
-                matches = sum(1 for keyword in keywords if keyword in text_str)
-                
-                # Calculate score (normalized by number of keywords)
-                score = (matches / len(keywords)) * weight if keywords else 0
-                
-                if score > 0:
-                    mood_scores.append({
-                        'mood': mood,
-                        'score': round(score, 4)
-                    })
+            # Get sentiment analysis
+            sentiment = self.analyze_sentiment(text)
             
-            # Sort by score in descending order
-            mood_scores.sort(key=lambda x: x['score'], reverse=True)
+            # Analyze mood transitions for longer texts
+            mood_transitions = []
+            if analyze_transitions and len(text.split()) > 20:  # Only for longer texts
+                sentences = sent_tokenize(text)
+                for sentence in sentences:
+                    if len(sentence.split()) > 3:  # Only analyze meaningful sentences
+                        mood = self._analyze_single_mood(sentence)
+                        mood_transitions.append({
+                            'text': sentence,
+                            'mood': mood['primary_mood'],
+                            'confidence': mood['confidence']
+                        })
             
-            # Return top N moods
-            return mood_scores[:top_n]
+            # Analyze overall mood
+            mood_result = self._analyze_single_mood(text)
+            
+            # Add transitions if analyzed
+            if analyze_transitions and mood_transitions:
+                mood_result['mood_transitions'] = mood_transitions
+            
+            return mood_result
             
         except Exception as e:
             logger.error(f"Error in mood detection: {e}")
-            return []
+            return {
+                'primary_mood': 'neutral',
+                'confidence': 0.0,
+                'mood_breakdown': {},
+                'sentiment': 'neutral',
+                'error': str(e)
+            }
+    
+    def _analyze_single_mood(self, text: str) -> Dict[str, Any]:
+        """Helper method to analyze mood for a single text segment."""
+        sentiment = self.analyze_sentiment(text)
+        tokens = self.preprocess_text(text, handle_emojis=True, handle_slang=True)
+        
+        mood_scores = {}
+        for mood, data in self.mood_keywords.items():
+            keywords = data['keywords']
+            weight = data['weight']
+            
+            # Boost scores based on sentiment alignment
+            sentiment_boost = 1.0
+            if (sentiment['sentiment'] == 'positive' and mood in ['happy', 'excited', 'inspiring']) or \
+               (sentiment['sentiment'] == 'negative' and mood in ['sad', 'angry', 'mysterious']):
+                sentiment_boost = 1.5
+                
+            # Score based on keyword matches
+            score = sum(
+                weight * tokens.count(word)
+                for word in keywords
+                if word in tokens
+            )
+            
+            # Add emoji-based mood detection
+            emoji_matches = re.findall(r':[a-z_]+:', text.lower())
+            for emoji_text in emoji_matches:
+                if any(kw in emoji_text for kw in keywords):
+                    score += 2.0  # Higher weight for emoji matches
+            
+            if score > 0:
+                mood_scores[mood] = min(1.0, (score / 5.0) * sentiment_boost)
+        
+        # If no specific mood detected, use sentiment as mood
+        if not mood_scores:
+            primary_mood = sentiment['sentiment']
+            confidence = abs(sentiment['vader_scores']['compound'])
+            return {
+                'primary_mood': primary_mood,
+                'confidence': round(confidence, 2),
+                'mood_breakdown': {primary_mood: confidence},
+                'sentiment': sentiment['sentiment']
+            }
+        
+        # Get primary mood (highest scoring)
+        primary_mood, confidence = max(mood_scores.items(), key=lambda x: x[1])
+        
+        return {
+            'primary_mood': primary_mood,
+            'confidence': round(confidence, 2),
+            'mood_breakdown': {k: round(v, 2) for k, v in sorted(
+                mood_scores.items(),
+                key=lambda x: x[1],
+                reverse=True
+            )},
+            'sentiment': sentiment['sentiment']
+        }
     
     def extract_keywords(self, text: str, top_n: int = 10, method: str = 'tfidf') -> List[Dict[str, Any]]:
         """
