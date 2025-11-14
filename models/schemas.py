@@ -119,3 +119,16 @@ class Token(BaseModel):
 
 class TokenData(BaseModel):
     username: Optional[str] = None
+
+class MoodAnalysis(BaseModel):
+    """Schema for mood analysis results"""
+    primary_mood: str
+    confidence: float
+    sentiment: str
+    mood_breakdown: dict
+    mood_transitions: Optional[List[dict]] = None
+
+class TextMoodRequest(BaseModel):
+    """Schema for text mood analysis request"""
+    text: str
+    analyze_transitions: bool = False
