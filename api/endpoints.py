@@ -74,8 +74,7 @@ async def login(login_data: dict = Body(...)):
 @router.post("/contents/{content_id}/comments", response_model=schemas.Sentiment, status_code=status.HTTP_201_CREATED)
 async def add_comment(
     content_id: str,
-    comment_data: schemas.SentimentCreate,
-    current_user: UserRecord = Depends(get_current_user)
+    comment_data: schemas.SentimentCreate
 ):
     """
     Add a comment to content and analyze its sentiment
@@ -144,8 +143,7 @@ async def add_comment(
 
 @router.post("/recommendations", response_model=List[schemas.RecommendationResponse])
 async def get_recommendations(
-    query: schemas.RecommendationQuery,
-    current_user: UserRecord = Depends(get_current_user)
+    query: schemas.RecommendationQuery
 ):
     """
     Get personalized content recommendations based on user input text and preferences
@@ -210,8 +208,7 @@ async def get_recommendations(
 
 @router.post("/analyze/mood", response_model=schemas.MoodAnalysis)
 async def analyze_mood(
-    request: schemas.TextMoodRequest,
-    current_user: UserRecord = Depends(get_current_user)
+    request: schemas.TextMoodRequest
 ):
     """
     Analyze text to detect mood and sentiment

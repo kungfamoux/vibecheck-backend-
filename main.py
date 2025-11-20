@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 # Import API routers
 from api.endpoints import router as api_router
 from api.auth_endpoints import router as auth_router
+from api.content_endpoints import router as content_router
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -72,6 +73,7 @@ app.add_middleware(
 # Include API routers
 app.include_router(api_router)
 app.include_router(auth_router)
+app.include_router(content_router)
 
 # Security scheme for API documentation
 security = HTTPBearer()
