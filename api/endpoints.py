@@ -6,7 +6,8 @@ from firebase_admin import auth
 from firebase_admin.auth import UserRecord
 
 from models import schemas
-from services import ml_service, recommendation_engine
+from services.ml_service import ml_service
+from services import recommendation_engine
 from auth.auth_bearer import auth_scheme
 import logging
 
