@@ -17,6 +17,7 @@ import os
 import string
 from heapq import nlargest
 from string import punctuation
+import emoji
 
 # Download required NLTK data
 REQUIRED_NLTK_DATA = [
@@ -138,6 +139,17 @@ class MLService:
         # Initialize sentiment analyzer (TextBlob as base, can be extended with more advanced models)
         self.sentiment_analyzer = TextBlob
         
+        # Initialize mood keywords
+        self.mood_keywords = {
+            'happy': ['happy', 'joy', 'excited', 'great', 'amazing', 'wonderful', 'fantastic', 'awesome', 'delighted', 'pleased'],
+            'sad': ['sad', 'unhappy', 'depressed', 'miserable', 'heartbroken', 'gloomy', 'sorrow', 'tearful', 'down', 'upset'],
+            'angry': ['angry', 'mad', 'furious', 'annoyed', 'irritated', 'frustrated', 'outraged', 'livid', 'enraged', 'irate'],
+            'surprised': ['surprised', 'shocked', 'amazed', 'astonished', 'stunned', 'astounded', 'dumbfounded', 'flabbergasted', 'startled'],
+            'fearful': ['scared', 'afraid', 'fearful', 'terrified', 'frightened', 'panicked', 'nervous', 'worried', 'anxious', 'apprehensive'],
+            'disgusted': ['disgusted', 'repulsed', 'revolted', 'sickened', 'nauseated', 'horrified', 'appalled', 'grossed out', 'displeased'],
+            'neutral': ['ok', 'fine', 'alright', 'normal', 'usual', 'regular', 'typical', 'ordinary', 'commonplace', 'unremarkable']
+        }
+        
         # Initialize model parameters
         self.model_initialized = False
         self.model_path = model_path
@@ -164,9 +176,13 @@ class MLService:
             text = text.lower()
             
             # Handle emojis
-            if handle_emojis:
-                # Replace emojis with their text descriptions
-                text = emoji.demojize(text, delimiters=(' ', ' '))
+            if handle_emojis and any(char in emoji.EMOJI_DATA for char in text):
+                try:
+                    text = emoji.demojize(text, delimiters=(' ', ' '))
+                except Exception as e:
+                    logger.warning(f"Error processing emojis: {e}")
+                    # Remove emojis if there's an error processing them
+                    text = ''.join(char for char in text if char not in emoji.EMOJI_DATA)
             
             # Handle common slang
             if handle_slang:

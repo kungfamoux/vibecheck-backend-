@@ -147,10 +147,10 @@ async def get_recommendations(
     query: schemas.RecommendationQuery
 ):
     """
-    Get personalized content recommendations based on user input text and preferences
+    Get content recommendations based on input text and preferences
     
     Request body should contain:
-    - **user_text**: The user's input text to analyze for mood and preferences
+    - **user_text**: The input text to analyze for mood and preferences
     
     Returns a list of recommended content items with match scores
     """
@@ -161,7 +161,7 @@ async def get_recommendations(
                 detail="user_text is required in the request body"
             )
             
-        logger.info(f"Getting recommendations for user {current_user.uid} based on text: {query.user_text[:100]}...")
+        logger.info(f"Getting recommendations based on text: {query.user_text[:100]}...")
         
         # Analyze the user's text to get mood tags
         mood_tags_with_scores = ml_service.predict_content_tags(query.user_text)
@@ -177,20 +177,20 @@ async def get_recommendations(
         recommendations = await recommendation_engine.get_recommendations(
             mood_tags=mood_tags,
             limit=10,
-            user_id=current_user.uid,
+            user_id="anonymous",  # Use a default user ID for unauthenticated users
             user_text=query.user_text
         )
         
-        # Log the recommendation request for future personalization
+        # Log the recommendation request (without user ID for anonymous users)
         try:
             from models.database import db
             from datetime import datetime
             
             db.collection("recommendation_requests").add({
-                "user_id": current_user.uid,
                 "user_text": query.user_text,
                 "mood_tags": mood_tags,
                 "recommendation_count": len(recommendations),
+                "is_anonymous": True,
                 "created_at": datetime.utcnow().isoformat()
             })
         except Exception as e:
