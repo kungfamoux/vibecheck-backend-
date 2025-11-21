@@ -22,21 +22,29 @@ import emoji
 # Download required NLTK data
 REQUIRED_NLTK_DATA = [
     'punkt', 'stopwords', 'wordnet', 'omw-1.4', 
-    'averaged_perceptron_tagger', 'vader_lexicon'
+    'averaged_perceptron_tagger', 'vader_lexicon',
+    'punkt_tab/english'  # Added punkt_tab data
 ]
 
 def download_nltk_data():
     """Download required NLTK data if not already present."""
     try:
+        import nltk
         for data in REQUIRED_NLTK_DATA:
             try:
-                nltk.data.find(f'tokenizers/{data}')
+                if '/' in data:  # Handle paths like 'punkt_tab/english'
+                    nltk.data.find(data)
+                else:
+                    nltk.data.find(f'tokenizers/{data}')
             except LookupError:
-                nltk.download(data, quiet=True)
+                nltk.download(data.split('/')[0], quiet=True)
     except Exception as e:
         print(f"Error downloading NLTK data: {e}")
 
-download_nltk_data()
+try:
+    download_nltk_data()
+except Exception as e:
+    print(f"Warning: Could not download NLTK data: {e}")
 
 # Initialize NLTK components
 nltk.download('vader_lexicon')

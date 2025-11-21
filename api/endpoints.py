@@ -174,11 +174,11 @@ async def get_recommendations(
         logger.info(f"Detected mood tags: {mood_tags}")
         
         # Get recommendations based on mood tags
-        recommendations = await recommendation_engine.get_recommendations(
-            mood_tags=mood_tags,
-            limit=10,
-            user_id="anonymous",  # Use a default user ID for unauthenticated users
-            user_text=query.user_text
+        # Get the first mood tag or use 'neutral' as default
+        primary_mood = mood_tags[0] if mood_tags else 'neutral'
+        recommendations = recommendation_engine.get_similar_mood_content(
+            mood=primary_mood,
+            top_n=10
         )
         
         # Log the recommendation request (without user ID for anonymous users)
