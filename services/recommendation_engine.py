@@ -178,29 +178,99 @@ class MoodBasedRecommender:
         )
         self.content_embeddings = None
         logger.info("MoodBasedRecommender initialized")
-    
-    async def _refresh_content_cache(self):
-        """Load and process content from the database."""
+        
+    async def initialize_sample_content(self):
+        """Initialize sample content in Firebase Realtime Database."""
         try:
-            content_docs = content_ref.stream()
-            self.content_cache = {
-                doc.id: {**doc.to_dict(), 'content_id': doc.id}
-                for doc in content_docs
-            }
+            from firebase_admin import db
+            from datetime import datetime, timezone
             
-            # Prepare text for vectorization
-            content_texts = [
-                f"{content.get('title', '')} {content.get('description', '')} "
-                f"{' '.join(content.get('tags', []))}"
-                for content in self.content_cache.values()
+            ref = db.reference('contents')
+            
+            # Sample content data
+            sample_content = [
+                {
+                    'title': '10 Tips for a Happy Life',
+                    'description': 'Discover simple ways to bring more joy into your daily routine and improve your overall happiness.',
+                    'tags': ['happiness', 'lifestyle', 'self-improvement'],
+                    'created_at': datetime.now(timezone.utc).isoformat(),
+                    'sentiment': 0.8
+                },
+                {
+                    'title': 'Overcoming Challenges',
+                    'description': 'Learn effective strategies to face and overcome life\'s challenges with resilience.',
+                    'tags': ['resilience', 'motivation', 'personal-growth'],
+                    'created_at': datetime.now(timezone.utc).isoformat(),
+                    'sentiment': 0.6
+                },
+                {
+                    'title': 'Mindfulness Meditation Guide',
+                    'description': 'A beginner\'s guide to mindfulness meditation for stress relief and mental clarity.',
+                    'tags': ['meditation', 'mindfulness', 'wellness'],
+                    'created_at': datetime.now(timezone.utc).isoformat(),
+                    'sentiment': 0.7
+                },
+                {
+                    'title': 'Healthy Eating Habits',
+                    'description': 'Simple changes you can make to your diet for better health and energy levels.',
+                    'tags': ['nutrition', 'health', 'wellness'],
+                    'created_at': datetime.now(timezone.utc).isoformat(),
+                    'sentiment': 0.75
+                },
+                {
+                    'title': 'Finding Your Purpose',
+                    'description': 'Explore different approaches to discovering your life\'s purpose and meaning.',
+                    'tags': ['purpose', 'meaning', 'self-discovery'],
+                    'created_at': datetime.now(timezone.utc).isoformat(),
+                    'sentiment': 0.65
+                }
             ]
             
-            # Create TF-IDF vectors
-            if content_texts:
-                self.content_embeddings = self.vectorizer.fit_transform(content_texts)
+            # Add sample content to database
+            for content in sample_content:
+                new_content_ref = ref.push()
+                new_content_ref.set(content)
+                
+            logger.info(f"Added {len(sample_content)} sample content items to Firebase")
+            return True
             
-            logger.info(f"Loaded {len(self.content_cache)} content items")
+        except Exception as e:
+            logger.error(f"Error initializing sample content: {e}")
+            return False
+    
+    async def _refresh_content_cache(self):
+        """Load and process content from Firebase Realtime Database."""
+        try:
+            from firebase_admin import db
             
+            # Reference to the 'contents' node in your Realtime Database
+            ref = db.reference('contents')
+            
+            # Get all content items
+            content_data = ref.get() or {}
+            
+            # Process and store content in cache
+            self.content_cache = {}
+            for content_id, content in content_data.items():
+                if not isinstance(content, dict):
+                    continue
+                    
+                # Ensure required fields exist
+                content['id'] = content_id
+                content.setdefault('title', 'Untitled')
+                content.setdefault('description', '')
+                content.setdefault('tags', [])
+                content.setdefault('created_at', 0)
+                
+                # Add to cache
+                self.content_cache[content_id] = content
+            
+            logger.info(f"Loaded {len(self.content_cache)} content items from Firebase")
+            
+            # Pre-compute embeddings if we have content
+            if self.content_cache:
+                await self._compute_content_embeddings()
+                
         except Exception as e:
             logger.error(f"Error refreshing content cache: {e}")
             self.content_cache = {}

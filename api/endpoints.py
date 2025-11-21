@@ -7,7 +7,15 @@ from firebase_admin.auth import UserRecord
 
 from models import schemas
 from services.ml_service import ml_service
-from services import recommendation_engine
+from services.recommendation_engine import MoodBasedRecommender
+
+# Create an instance of the recommendation engine
+recommendation_engine = MoodBasedRecommender()
+
+# Initialize sample content on startup
+import asyncio
+asyncio.create_task(recommendation_engine.initialize_sample_content())
+
 from auth.auth_bearer import auth_scheme
 import logging
 
@@ -142,6 +150,28 @@ async def add_comment(
             detail="An error occurred while adding the comment"
         )
 
+@router.post("/init-content", status_code=status.HTTP_200_OK)
+async def initialize_sample_content():
+    """
+    Initialize sample content in the database.
+    This endpoint is for development purposes only.
+    """
+    try:
+        success = await recommendation_engine.initialize_sample_content()
+        if success:
+            return {"status": "success", "message": "Sample content initialized successfully"}
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to initialize sample content"
+            )
+    except Exception as e:
+        logger.error(f"Error initializing sample content: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
 @router.post("/recommendations", response_model=List[schemas.RecommendationResponse])
 async def get_recommendations(
     query: schemas.RecommendationQuery
@@ -163,32 +193,76 @@ async def get_recommendations(
             
         logger.info(f"Getting recommendations based on text: {query.user_text[:100]}...")
         
-        # Analyze the user's text to get mood tags
-        mood_tags_with_scores = ml_service.predict_content_tags(query.user_text)
-        mood_tags = [tag for tag, score in mood_tags_with_scores if score > 0.3]  # Filter out low confidence tags
+        # Analyze the user's text to get mood
+        mood_result = ml_service.detect_mood(query.user_text)
+        primary_mood = mood_result.get('primary_mood', 'neutral')
+        mood_tags = [primary_mood]
         
         if not mood_tags:
             # Default to some general tags if no specific mood is detected
             mood_tags = ["general", "popular"]
         
-        logger.info(f"Detected mood tags: {mood_tags}")
+        logger.info(f"Detected mood: {primary_mood}")
         
-        # Get recommendations based on mood tags
-        # Get the first mood tag or use 'neutral' as default
-        primary_mood = mood_tags[0] if mood_tags else 'neutral'
-        recommendations = recommendation_engine.get_similar_mood_content(
-            mood=primary_mood,
-            top_n=10
-        )
+        # Ensure we have content loaded
+        await recommendation_engine._refresh_content_cache()
         
-        # Log the recommendation request (without user ID for anonymous users)
+        if not recommendation_engine.content_cache:
+            logger.warning("No content available in the database")
+            # Try to initialize sample content if none exists
+            await recommendation_engine.initialize_sample_content()
+            await recommendation_engine._refresh_content_cache()
+            
+            if not recommendation_engine.content_cache:
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="No content available for recommendations"
+                )
+        
+        # Get all content and score based on mood match
+        all_content = list(recommendation_engine.content_cache.values())
+        
+        # Score each content item based on mood match
+        scored_content = []
+        for content in all_content:
+            content_text = f"{content.get('title', '')} {content.get('description', '')}"
+            content_mood = ml_service.detect_mood(content_text)
+            content_primary_mood = content_mood.get('primary_mood', 'neutral')
+            
+            # Calculate match score (simple for now, can be enhanced)
+            mood_match = 1.0 if content_primary_mood == primary_mood else 0.5
+            
+            # Include sentiment in scoring
+            sentiment_score = content.get('sentiment', 0.5)  # Default to neutral if not set
+            
+            # Combine scores (weighted average)
+            score = (mood_match * 0.7) + (sentiment_score * 0.3)
+            
+            scored_content.append({
+                'id': content.get('id', ''),
+                'title': content.get('title', 'Untitled'),
+                'description': content.get('description', ''),
+                'mood': content_primary_mood,
+                'sentiment': 'positive' if sentiment_score > 0.6 else 'negative' if sentiment_score < 0.4 else 'neutral',
+                'score': min(1.0, max(0.0, score))  # Ensure score is between 0 and 1
+            })
+        
+        # Sort by score (highest first) and take top 10
+        recommendations = sorted(
+            scored_content, 
+            key=lambda x: x['score'], 
+            reverse=True
+        )[:10]
+        
+        # Log the recommendation request
         try:
             from models.database import db
             from datetime import datetime
             
-            db.collection("recommendation_requests").add({
+            db.reference('recommendation_requests').push({
                 "user_text": query.user_text,
                 "mood_tags": mood_tags,
+                "primary_mood": primary_mood,
                 "recommendation_count": len(recommendations),
                 "is_anonymous": True,
                 "created_at": datetime.utcnow().isoformat()
@@ -198,13 +272,14 @@ async def get_recommendations(
         
         return recommendations
         
-    except HTTPException:
+    except HTTPException as he:
+        logger.error(f"HTTP error in get_recommendations: {str(he)}")
         raise
     except Exception as e:
-        logger.error(f"Error getting recommendations: {str(e)}", exc_info=True)
+        logger.error(f"Error in get_recommendations: {str(e)}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An error occurred while generating recommendations"
+            detail=f"An error occurred while generating recommendations: {str(e)}"
         )
 
 @router.post("/analyze/mood", response_model=schemas.MoodAnalysis)

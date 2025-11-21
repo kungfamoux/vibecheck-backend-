@@ -147,15 +147,36 @@ class MLService:
         # Initialize sentiment analyzer (TextBlob as base, can be extended with more advanced models)
         self.sentiment_analyzer = TextBlob
         
-        # Initialize mood keywords
+        # Initialize mood keywords with weights
         self.mood_keywords = {
-            'happy': ['happy', 'joy', 'excited', 'great', 'amazing', 'wonderful', 'fantastic', 'awesome', 'delighted', 'pleased'],
-            'sad': ['sad', 'unhappy', 'depressed', 'miserable', 'heartbroken', 'gloomy', 'sorrow', 'tearful', 'down', 'upset'],
-            'angry': ['angry', 'mad', 'furious', 'annoyed', 'irritated', 'frustrated', 'outraged', 'livid', 'enraged', 'irate'],
-            'surprised': ['surprised', 'shocked', 'amazed', 'astonished', 'stunned', 'astounded', 'dumbfounded', 'flabbergasted', 'startled'],
-            'fearful': ['scared', 'afraid', 'fearful', 'terrified', 'frightened', 'panicked', 'nervous', 'worried', 'anxious', 'apprehensive'],
-            'disgusted': ['disgusted', 'repulsed', 'revolted', 'sickened', 'nauseated', 'horrified', 'appalled', 'grossed out', 'displeased'],
-            'neutral': ['ok', 'fine', 'alright', 'normal', 'usual', 'regular', 'typical', 'ordinary', 'commonplace', 'unremarkable']
+            'happy': {
+                'keywords': ['happy', 'joy', 'excited', 'great', 'amazing', 'wonderful', 'fantastic', 'awesome', 'delighted', 'pleased'],
+                'weight': 1.0
+            },
+            'sad': {
+                'keywords': ['sad', 'unhappy', 'depressed', 'miserable', 'heartbroken', 'gloomy', 'sorrow', 'tearful', 'down', 'upset'],
+                'weight': 1.0
+            },
+            'angry': {
+                'keywords': ['angry', 'mad', 'furious', 'annoyed', 'irritated', 'frustrated', 'outraged', 'livid', 'enraged', 'irate'],
+                'weight': 1.2
+            },
+            'surprised': {
+                'keywords': ['surprised', 'shocked', 'amazed', 'astonished', 'stunned', 'astounded', 'dumbfounded', 'flabbergasted', 'startled'],
+                'weight': 0.9
+            },
+            'fearful': {
+                'keywords': ['scared', 'afraid', 'fearful', 'terrified', 'frightened', 'panicked', 'nervous', 'worried', 'anxious', 'apprehensive'],
+                'weight': 1.1
+            },
+            'disgusted': {
+                'keywords': ['disgusted', 'repulsed', 'revolted', 'sickened', 'nauseated', 'horrified', 'appalled', 'grossed out', 'displeased'],
+                'weight': 1.1
+            },
+            'neutral': {
+                'keywords': ['ok', 'fine', 'alright', 'normal', 'usual', 'regular', 'typical', 'ordinary', 'commonplace', 'unremarkable'],
+                'weight': 0.8
+            }
         }
         
         # Initialize model parameters
