@@ -242,37 +242,57 @@ class MoodBasedRecommender:
         """Load and process content from Firebase Realtime Database."""
         try:
             from firebase_admin import db
+            from utils.firebase_config import initialize_firebase
             
-            # Reference to the 'contents' node in your Realtime Database
-            ref = db.reference('contents')
-            
-            # Get all content items
-            content_data = ref.get() or {}
-            
-            # Process and store content in cache
-            self.content_cache = {}
-            for content_id, content in content_data.items():
-                if not isinstance(content, dict):
-                    continue
-                    
-                # Ensure required fields exist
-                content['id'] = content_id
-                content.setdefault('title', 'Untitled')
-                content.setdefault('description', '')
-                content.setdefault('tags', [])
-                content.setdefault('created_at', 0)
+            # Initialize Firebase Admin SDK if not already initialized
+            try:
+                import firebase_admin
+                if not firebase_admin._apps:
+                    initialize_firebase()
                 
-                # Add to cache
-                self.content_cache[content_id] = content
-            
-            logger.info(f"Loaded {len(self.content_cache)} content items from Firebase")
-            
-            # Pre-compute embeddings if we have content
-            if self.content_cache:
-                await self._compute_content_embeddings()
+                # Reference to the 'contents' node in your Realtime Database
+                ref = db.reference('contents')
+                
+                # Get all content items
+                content_data = ref.get()
+                
+                if content_data is None:
+                    logger.warning("No content found in Firebase. The 'contents' node is empty.")
+                    self.content_cache = {}
+                    return
+                
+                # Process and store content in cache
+                self.content_cache = {}
+                for content_id, content in content_data.items():
+                    if not isinstance(content, dict):
+                        logger.warning(f"Skipping invalid content item (not a dict): {content_id}")
+                        continue
+                        
+                    # Ensure required fields exist
+                    content['id'] = content_id
+                    content.setdefault('title', 'Untitled')
+                    content.setdefault('description', '')
+                    content.setdefault('tags', [])
+                    content.setdefault('created_at', 0)
+                    content.setdefault('category', 'general')
+                    
+                    # Add to cache
+                    self.content_cache[content_id] = content
+                
+                logger.info(f"Successfully loaded {len(self.content_cache)} content items from Firebase")
+                
+                # Pre-compute embeddings if we have content
+                if self.content_cache:
+                    await self._compute_content_embeddings()
+                    
+            except Exception as e:
+                logger.error(f"Error fetching content from Firebase: {e}", exc_info=True)
+                self.content_cache = {}
+                self.content_embeddings = None
+                raise
                 
         except Exception as e:
-            logger.error(f"Error refreshing content cache: {e}")
+            logger.error(f"Error in _refresh_content_cache: {e}", exc_info=True)
             self.content_cache = {}
             self.content_embeddings = None
     

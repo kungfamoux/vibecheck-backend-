@@ -239,18 +239,17 @@ async def get_recommendations(
             score = (mood_match * 0.7) + (sentiment_score * 0.3)
             
             scored_content.append({
-                'id': content.get('id', ''),
+                'content_id': content.get('id', ''),
                 'title': content.get('title', 'Untitled'),
                 'description': content.get('description', ''),
-                'mood': content_primary_mood,
-                'sentiment': 'positive' if sentiment_score > 0.6 else 'negative' if sentiment_score < 0.4 else 'neutral',
-                'score': min(1.0, max(0.0, score))  # Ensure score is between 0 and 1
+                'category': content.get('category', 'general'),  # Default category if not set
+                'match_score': min(1.0, max(0.0, score))  # Ensure score is between 0 and 1
             })
         
-        # Sort by score (highest first) and take top 10
+        # Sort by match_score (highest first) and take top 10
         recommendations = sorted(
             scored_content, 
-            key=lambda x: x['score'], 
+            key=lambda x: x['match_score'], 
             reverse=True
         )[:10]
         
