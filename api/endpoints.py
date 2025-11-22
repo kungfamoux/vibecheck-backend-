@@ -255,10 +255,16 @@ async def get_recommendations(
         
         # Log the recommendation request
         try:
-            from models.database import db
+            import firebase_admin
+            from firebase_admin import db
             from datetime import datetime
             
-            db.reference('recommendation_requests').push({
+            if not firebase_admin._apps:
+                from utils.firebase_config import initialize_firebase
+                initialize_firebase()
+                
+            ref = db.reference('recommendation_requests')
+            ref.push({
                 "user_text": query.user_text,
                 "mood_tags": mood_tags,
                 "primary_mood": primary_mood,
@@ -267,7 +273,7 @@ async def get_recommendations(
                 "created_at": datetime.utcnow().isoformat()
             })
         except Exception as e:
-            logger.warning(f"Failed to log recommendation request: {e}")
+            logger.warning(f"Failed to log recommendation request: {e}", exc_info=True)
         
         return recommendations
         

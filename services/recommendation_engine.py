@@ -176,55 +176,192 @@ class MoodBasedRecommender:
             ngram_range=(1, 2),
             max_features=5000
         )
-        self.content_embeddings = None
+        self.content_embeddings = {}  # Initialize as empty dict instead of None
         logger.info("MoodBasedRecommender initialized")
         
     async def initialize_sample_content(self):
-        """Initialize sample content in Firebase Realtime Database."""
+        """Initialize sample content in Firebase Realtime Database with social media and motivational resources."""
         try:
             from firebase_admin import db
-            from datetime import datetime, timezone
+            from datetime import datetime, timezone, timedelta
+            import random
             
             ref = db.reference('contents')
             
-            # Sample content data
-            sample_content = [
+            # Clear existing content
+            ref.delete()
+            
+            # Base content templates for variety
+            content_templates = [
+                # Morning/Evening Routines
                 {
-                    'title': '10 Tips for a Happy Life',
-                    'description': 'Discover simple ways to bring more joy into your daily routine and improve your overall happiness.',
-                    'tags': ['happiness', 'lifestyle', 'self-improvement'],
-                    'created_at': datetime.now(timezone.utc).isoformat(),
-                    'sentiment': 0.8
+                    'title': ['Morning Motivation', 'Evening Wind Down', 'Daily Boost', 'Sunrise Inspiration', 'Nightly Reflection'],
+                    'description': [
+                        'Start/End your day with powerful motivation and positive energy.',
+                        'Perfect routine to begin/conclude your day with purpose and clarity.',
+                        'Transform your morning/night with these life-changing habits.'
+                    ],
+                    'tags': ['routine', 'productivity', 'mindfulness'],
+                    'type': 'video',
+                    'sentiment': [0.85, 0.9],
+                    'platforms': ['youtube', 'instagram', 'tiktok']
                 },
+                # Workout & Fitness
                 {
-                    'title': 'Overcoming Challenges',
-                    'description': 'Learn effective strategies to face and overcome life\'s challenges with resilience.',
-                    'tags': ['resilience', 'motivation', 'personal-growth'],
-                    'created_at': datetime.now(timezone.utc).isoformat(),
-                    'sentiment': 0.6
+                    'title': ['Home Workout', 'Yoga Flow', 'HIIT Session', 'Strength Training', 'Cardio Blast'],
+                    'description': [
+                        'Effective workout routines you can do anywhere, anytime.',
+                        'Boost your fitness with these challenging exercises.',
+                        'No equipment needed for this full-body workout.'
+                    ],
+                    'tags': ['fitness', 'workout', 'exercise', 'health'],
+                    'type': 'video',
+                    'sentiment': [0.8, 0.9],
+                    'platforms': ['youtube', 'instagram', 'tiktok', 'app']
                 },
+                # Meditation & Mindfulness
                 {
-                    'title': 'Mindfulness Meditation Guide',
-                    'description': 'A beginner\'s guide to mindfulness meditation for stress relief and mental clarity.',
-                    'tags': ['meditation', 'mindfulness', 'wellness'],
-                    'created_at': datetime.now(timezone.utc).isoformat(),
-                    'sentiment': 0.7
+                    'title': ['Guided Meditation', 'Breathwork', 'Mindful Moments', 'Stress Relief', 'Sleep Meditation'],
+                    'description': [
+                        'Find your center with this calming meditation practice.',
+                        'Reduce stress and anxiety with mindful breathing techniques.',
+                        'Perfect for beginners and experienced practitioners alike.'
+                    ],
+                    'tags': ['meditation', 'mindfulness', 'relaxation', 'sleep'],
+                    'type': 'audio',
+                    'sentiment': [0.7, 0.9],
+                    'platforms': ['spotify', 'youtube', 'app']
                 },
+                # Personal Development
                 {
-                    'title': 'Healthy Eating Habits',
-                    'description': 'Simple changes you can make to your diet for better health and energy levels.',
-                    'tags': ['nutrition', 'health', 'wellness'],
-                    'created_at': datetime.now(timezone.utc).isoformat(),
-                    'sentiment': 0.75
+                    'title': ['Goal Setting', 'Habit Building', 'Time Management', 'Productivity Hacks', 'Success Mindset'],
+                    'description': [
+                        'Learn powerful strategies to achieve your goals and build better habits.',
+                        'Transform your life with these proven personal development techniques.',
+                        'Master your time and increase your productivity.'
+                    ],
+                    'tags': ['productivity', 'self-improvement', 'success', 'goals'],
+                    'type': 'article',
+                    'sentiment': [0.8, 0.95],
+                    'platforms': ['website', 'medium', 'youtube']
                 },
+                # Inspirational Stories
                 {
-                    'title': 'Finding Your Purpose',
-                    'description': 'Explore different approaches to discovering your life\'s purpose and meaning.',
-                    'tags': ['purpose', 'meaning', 'self-discovery'],
-                    'created_at': datetime.now(timezone.utc).isoformat(),
-                    'sentiment': 0.65
+                    'title': ['Success Stories', 'Overcoming Adversity', 'Life Transformations', 'Against All Odds', 'Dream Chasers'],
+                    'description': [
+                        'Inspiring stories of people who turned their lives around.',
+                        'Real people, real struggles, incredible transformations.',
+                        'Proof that anything is possible with determination.'
+                    ],
+                    'tags': ['inspiration', 'stories', 'motivation', 'success'],
+                    'type': 'video',
+                    'sentiment': [0.9, 1.0],
+                    'platforms': ['youtube', 'instagram', 'tiktok']
+                },
+                # Mental Health
+                {
+                    'title': ['Anxiety Relief', 'Self-Care Tips', 'Mental Wellness', 'Emotional Balance', 'Mindfulness Practice'],
+                    'description': [
+                        'Essential practices for maintaining good mental health.',
+                        'Self-care strategies for emotional well-being.',
+                        'Learn to manage stress and build resilience.'
+                    ],
+                    'tags': ['mental-health', 'self-care', 'wellbeing', 'anxiety'],
+                    'type': 'article',
+                    'sentiment': [0.75, 0.85],
+                    'platforms': ['website', 'medium', 'youtube']
+                },
+                # Nutrition & Health
+                {
+                    'title': ['Healthy Eating', 'Meal Prep', 'Superfoods', 'Gut Health', 'Immune Boosting'],
+                    'description': [
+                        'Nutrition tips for optimal health and energy.',
+                        'Simple, delicious recipes for a healthier you.',
+                        'The science behind healthy eating habits.'
+                    ],
+                    'tags': ['nutrition', 'health', 'food', 'wellness'],
+                    'type': 'article',
+                    'sentiment': [0.8, 0.9],
+                    'platforms': ['website', 'instagram', 'youtube']
                 }
             ]
+            
+            # Platform-specific links
+            platform_links = {
+                'youtube': [
+                    'https://youtube.com/c/example1',
+                    'https://youtube.com/c/example2',
+                    'https://youtube.com/c/example3'
+                ],
+                'instagram': [
+                    'https://www.instagram.com/wellness/',
+                    'https://www.instagram.com/motivation/',
+                    'https://www.instagram.com/fitness/'
+                ],
+                'tiktok': [
+                    'https://www.tiktok.com/tag/motivation',
+                    'https://www.tiktok.com/tag/fitness',
+                    'https://www.tiktok.com/tag/meditation'
+                ],
+                'spotify': [
+                    'https://open.spotify.com/show/example1',
+                    'https://open.spotify.com/show/example2',
+                    'https://open.spotify.com/show/example3'
+                ],
+                'website': [
+                    'https://www.mindbodygreen.com/',
+                    'https://www.verywellmind.com/',
+                    'https://www.healthline.com/'
+                ],
+                'app': [
+                    'https://www.headspace.com/',
+                    'https://www.myfitnesspal.com/',
+                    'https://www.calm.com/'
+                ],
+                'medium': [
+                    'https://medium.com/tag/self-improvement',
+                    'https://medium.com/tag/productivity',
+                    'https://medium.com/tag/mental-health'
+                ]
+            }
+            
+            # Generate 35 unique content items
+            sample_content = []
+            used_titles = set()
+            
+            while len(sample_content) < 35:
+                template = random.choice(content_templates)
+                
+                # Generate unique title
+                while True:
+                    title = random.choice(template['title']) + ' ' + str(random.randint(1, 100))
+                    if title not in used_titles:
+                        used_titles.add(title)
+                        break
+                
+                # Create content item
+                content = {
+                    'title': title,
+                    'description': random.choice(template['description']),
+                    'tags': random.sample(template['tags'], min(3, len(template['tags']))),
+                    'type': template['type'],
+                    'sentiment': round(random.uniform(*template['sentiment']), 2),
+                    'created_at': (datetime.now(timezone.utc) - timedelta(days=random.randint(0, 30))).isoformat(),
+                    'links': {}
+                }
+                
+                # Add platform links (2-4 per content)
+                platforms = random.sample(template['platforms'], random.randint(2, min(4, len(template['platforms']))))
+                for platform in platforms:
+                    content['links'][platform] = random.choice(platform_links[platform])
+                
+                # Add some additional metadata
+                if random.random() > 0.7:  # 30% chance to have additional metadata
+                    content['duration'] = f"{random.randint(5, 60)} min"
+                    if random.random() > 0.5:
+                        content['difficulty'] = random.choice(['beginner', 'intermediate', 'advanced'])
+                
+                sample_content.append(content)
             
             # Add sample content to database
             for content in sample_content:
