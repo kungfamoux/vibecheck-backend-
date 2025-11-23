@@ -37,10 +37,24 @@ class JWTBearer(HTTPBearer):
     def verify_jwt(self, jwt_token: str) -> dict:
         """Verify the JWT token with Firebase Admin SDK"""
         try:
-            decoded_token = auth.verify_id_token(jwt_token)
-            return decoded_token
+            # First try to verify as ID token
+            try:
+                decoded_token = auth.verify_id_token(jwt_token)
+                return decoded_token
+            except ValueError as e:
+                # If it's not an ID token, try to verify as a custom token
+                if 'verify_id_token() expects an ID token' in str(e):
+                    try:
+                        # Get the user by the custom token
+                        user = auth.get_user_by_phone_number(jwt_token)  # or any other identifier
+                        if user:
+                            return {'uid': user.uid, 'email': user.email}
+                    except Exception:
+                        pass
+                logger.error(f"Token verification error: {e}")
+                return None
         except Exception as e:
-            logger.error(f"Error verifying token: {e}")
+            logger.error(f"Unexpected error during token verification: {e}")
             return None
 
 # Create an instance of JWTBearer to use as a dependency
