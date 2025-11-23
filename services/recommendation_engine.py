@@ -1,8 +1,11 @@
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.feature_extraction.text import TfidfVectorizer
 import logging
+import asyncio
+from datetime import datetime, timezone, timedelta
 from .ml_service import ml_service
+from .social_media_service import youtube_service, spotify_service
 from models.database import content_ref
 
 # Initialize logger
@@ -179,6 +182,18 @@ class MoodBasedRecommender:
         self.content_embeddings = {}  # Initialize as empty dict instead of None
         logger.info("MoodBasedRecommender initialized")
         
+    async def clear_all_content(self):
+        """Clear all content from the database."""
+        try:
+            from firebase_admin import db
+            ref = db.reference('contents')
+            ref.delete()
+            logger.info("Successfully cleared all content from the database")
+            return True
+        except Exception as e:
+            logger.error(f"Error clearing content: {e}")
+            return False
+            
     async def initialize_sample_content(self):
         """Initialize sample content in Firebase Realtime Database with social media and motivational resources."""
         try:
@@ -186,10 +201,9 @@ class MoodBasedRecommender:
             from datetime import datetime, timezone, timedelta
             import random
             
-            ref = db.reference('contents')
-            
             # Clear existing content
-            ref.delete()
+            ref = db.reference('contents')
+            await self.clear_all_content()
             
             # Base content templates for variety
             content_templates = [
@@ -375,8 +389,77 @@ class MoodBasedRecommender:
             logger.error(f"Error initializing sample content: {e}")
             return False
     
+    async def _fetch_external_content(self, mood: str, limit: int = 5) -> List[Dict]:
+        """Fetch content from external APIs based on mood."""
+        try:
+            # Create search queries based on mood
+            queries = [
+                f"{mood} motivation",
+                f"{mood} meditation",
+                f"{mood} music",
+                f"{mood} inspiration"
+            ]
+            
+            # Fetch from YouTube and Spotify in parallel
+            youtube_tasks = [youtube_service.search_videos(query, limit) for query in queries]
+            spotify_tasks = [spotify_service.search_playlists(query, limit) for query in queries]
+            
+            youtube_results = await asyncio.gather(*youtube_tasks, return_exceptions=True)
+            spotify_results = await asyncio.gather(*spotify_tasks, return_exceptions=True)
+            
+            # Flatten and process results
+            all_content = []
+            
+            # Process YouTube results
+            for result in youtube_results:
+                if isinstance(result, list):
+                    all_content.extend([{
+                        'id': f"yt_{item.get('url', '').split('v=')[-1]}",
+                        'title': item.get('title', 'No title'),
+                        'description': item.get('description', ''),
+                        'type': 'video',
+                        'source': 'youtube',
+                        'url': item.get('url', ''),
+                        'thumbnail': item.get('thumbnail', ''),
+                        'sentiment': 0.8,  # Placeholder, could be analyzed
+                        'created_at': item.get('published_at', datetime.now(timezone.utc).isoformat()),
+                        'tags': [mood, 'video', 'motivation']
+                    } for item in result if item])
+            
+            # Process Spotify results
+            for result in spotify_results:
+                if isinstance(result, list):
+                    all_content.extend([{
+                        'id': f"sp_{str(hash(item.get('url', '')))[1:10]}",
+                        'title': item.get('name', 'No title'),
+                        'description': item.get('description', ''),
+                        'type': 'audio',
+                        'source': 'spotify',
+                        'url': item.get('url', ''),
+                        'thumbnail': item.get('thumbnail', ''),
+                        'sentiment': 0.8,  # Placeholder
+                        'created_at': datetime.now(timezone.utc).isoformat(),
+                        'tags': [mood, 'music', 'playlist']
+                    } for item in result if item])
+            
+            # Remove duplicates based on URL
+            seen_urls = set()
+            unique_content = []
+            for item in all_content:
+                if item['url'] not in seen_urls:
+                    seen_urls.add(item['url'])
+                    unique_content.append(item)
+                    if len(unique_content) >= limit * 2:  # Limit total results
+                        break
+            
+            return unique_content
+            
+        except Exception as e:
+            logger.error(f"Error fetching external content: {e}")
+            return []
+    
     async def _refresh_content_cache(self):
-        """Load and process content from Firebase Realtime Database."""
+        """Load and process content from Firebase Realtime Database and external APIs."""
         try:
             from firebase_admin import db
             from utils.firebase_config import initialize_firebase
@@ -436,7 +519,7 @@ class MoodBasedRecommender:
     async def _compute_content_embeddings(self):
         """Compute TF-IDF embeddings for all content items."""
         if not self.content_cache:
-            return
+            return []
             
         try:
             # Prepare text data for TF-IDF
@@ -453,69 +536,32 @@ class MoodBasedRecommender:
             tfidf_matrix = self.vectorizer.fit_transform(content_texts)
             
             # Store the embeddings
+            self.content_embeddings = {}
             for i, content_id in enumerate(content_ids):
                 self.content_embeddings[content_id] = tfidf_matrix[i]
+                
+            # Get content as list for further processing
+            all_content = list(self.content_cache.values())
+            
+            # Sort by match score if available
+            all_content.sort(key=lambda x: x.get('match_score', 0), reverse=True)
+            
+            # Remove duplicates by URL
+            seen_urls = set()
+            unique_content = []
+            for item in all_content:
+                url = item.get('url', '')
+                if url and url not in seen_urls:
+                    seen_urls.add(url)
+                    unique_content.append(item)
+                    if len(unique_content) >= 50:  # Keep a reasonable limit
+                        break
+            
+            return unique_content
                 
         except Exception as e:
             logger.error(f"Error computing content embeddings: {e}")
             self.content_embeddings = {}
-    
-    async def get_similar_mood_content(
-        self, 
-        mood: str,
-        top_n: int = 5
-    ) -> List[Dict[str, Any]]:
-        """
-        Find content that matches a specific mood.
-        
-        Args:
-            mood: The target mood to match (e.g., 'happy', 'calm', 'energetic')
-            top_n: Number of items to return
-            
-        Returns:
-            List of content items with mood match scores
-        """
-        try:
-            if not self.content_cache:
-                await self._refresh_content_cache()
-                
-            if not self.content_cache:
-                return []
-            
-            # Analyze mood for all content
-            mood_scores = []
-            
-            for content_id, content in self.content_cache.items():
-                # Get text content
-                text = f"{content.get('title', '')} {content.get('description', '')}"
-                
-                # Analyze mood
-                analysis = ml_service.analyze_content(text)
-                content_mood = next(
-                    (m['mood'] for m in analysis.get('moods', []) if m['mood'].lower() == mood.lower()),
-                    None
-                )
-                
-                if content_mood:
-                    mood_scores.append((content_id, 1.0))
-            
-            # Sort by mood match score
-            mood_scores.sort(key=lambda x: x[1], reverse=True)
-            
-            # Get top N matches
-            results = []
-            for content_id, score in mood_scores[:top_n]:
-                results.append({
-                    **self.content_cache[content_id],
-                    'content_id': content_id,
-                    'mood_match_score': score,
-                    'explanation': f"Matches mood: {mood}"
-                })
-                
-            return results
-            
-        except Exception as e:
-            logger.error(f"Error finding mood-matching content: {e}")
             return []
     
     def _calculate_content_similarity(self, content_id1: str, content_id2: str) -> float:
@@ -1151,6 +1197,154 @@ class MoodBasedRecommender:
             logger.error(f"Error getting content sentiment scores: {e}")
             return {}
     
+    async def get_similar_mood_content(
+        self,
+        mood: str,
+        top_n: int = 10,
+        include_external: bool = True  # Kept for backward compatibility
+    ) -> List[Dict[str, Any]]:
+        """
+        Get content recommendations from social media platforms based on mood.
+        
+        Args:
+            mood: The detected mood (e.g., 'happy', 'sad', 'energetic')
+            top_n: Number of recommendations to return (max 20)
+            include_external: For backward compatibility, always uses external content
+            
+        Returns:
+            List of content recommendations with metadata from social platforms
+        """
+        try:
+            from services.social_media_service import youtube_service, spotify_service
+            
+            # Limit the number of results to prevent excessive API calls
+            top_n = min(top_n, 20)
+            
+            # Get content from both YouTube and Spotify
+            youtube_results = []
+            spotify_results = []
+            
+            # Map mood to search queries
+            mood_queries = {
+                'happy': ['upbeat', 'happy', 'joyful', 'summer', 'party'],
+                'sad': ['sad', 'melancholic', 'emotional', 'heartbreak', 'rainy day'],
+                'energetic': ['workout', 'energetic', 'intense', 'gym', 'running'],
+                'calm': ['calm', 'relaxing', 'peaceful', 'meditation', 'sleep'],
+                'focused': ['focus', 'concentration', 'study', 'work', 'productivity']
+            }
+            
+            # Get queries for the current mood or use default
+            queries = mood_queries.get(mood.lower(), [mood, 'motivation'])
+            
+            # Get YouTube content
+            try:
+                for query in queries[:2]:  # Use first 2 queries
+                    videos = await youtube_service.search_videos(
+                        query=f"{query} {mood} motivation",
+                        max_results=max(3, top_n // 2)
+                    )
+                    for video in videos:
+                        video.update({
+                            'source': 'youtube',
+                            'type': 'video',
+                            'match_score': 0.9,  # High score for direct mood match
+                            'mood': mood,
+                            'tags': [mood, query, 'motivation']
+                        })
+                    youtube_results.extend(videos)
+            except Exception as e:
+                logger.error(f"Error getting YouTube content: {e}")
+            
+            # Get Spotify content
+            try:
+                # Get playlists
+                for query in queries[:2]:
+                    playlists = await spotify_service.search_playlists(
+                        query=f"{query} {mood}",
+                        limit=max(2, top_n // 4)
+                    )
+                    for playlist in playlists:
+                        playlist.update({
+                            'source': 'spotify',
+                            'type': 'playlist',
+                            'match_score': 0.85,
+                            'mood': mood,
+                            'tags': [mood, query, 'playlist']
+                        })
+                    spotify_results.extend(playlists)
+                
+                # Get track recommendations
+                recommendations = await spotify_service.get_recommendations(
+                    seed_genres=[mood],
+                    limit=max(3, top_n // 2),
+                    **self._get_audio_features_for_mood(mood)
+                )
+                
+                for track in recommendations:
+                    track.update({
+                        'source': 'spotify',
+                        'type': 'track',
+                        'match_score': 0.9,  # High score for algorithm-based recommendations
+                        'mood': mood,
+                        'tags': [mood, 'recommended', 'spotify']
+                    })
+                    spotify_results.append(track)
+                    
+            except Exception as e:
+                logger.error(f"Error getting Spotify content: {e}")
+            
+            # Combine and sort all results
+            all_results = youtube_results + spotify_results
+            all_results.sort(key=lambda x: x.get('match_score', 0), reverse=True)
+            
+            # Remove duplicates by URL/ID
+            seen = set()
+            unique_results = []
+            for item in all_results:
+                item_id = item.get('id') or item.get('url', '')
+                if item_id and item_id not in seen:
+                    seen.add(item_id)
+                    unique_results.append(item)
+                    if len(unique_results) >= top_n:
+                        break
+            
+            return unique_results
+            
+        except Exception as e:
+            logger.error(f"Error in get_similar_mood_content: {e}")
+            return []
+            
+    def _get_audio_features_for_mood(self, mood: str) -> Dict[str, float]:
+        """Get audio feature filters based on mood."""
+        mood_features = {
+            'happy': {
+                'min_valence': 0.7,
+                'min_energy': 0.6,
+                'min_danceability': 0.6
+            },
+            'sad': {
+                'max_valence': 0.4,
+                'max_energy': 0.5,
+                'target_acousticness': 0.7
+            },
+            'energetic': {
+                'min_energy': 0.8,
+                'min_tempo': 120,
+                'min_danceability': 0.7
+            },
+            'calm': {
+                'max_energy': 0.4,
+                'max_tempo': 100,
+                'min_acousticness': 0.7
+            },
+            'focused': {
+                'min_instrumentalness': 0.7,
+                'max_valence': 0.6,
+                'max_energy': 0.7
+            }
+        }
+        return mood_features.get(mood.lower(), {})
+
     async def get_content_by_sentiment(
         self, 
         min_sentiment: float = 0.5, 

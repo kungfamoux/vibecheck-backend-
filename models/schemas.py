@@ -58,7 +58,6 @@ class Content(ContentBase):
 class InteractionType(str, Enum):
     VIEW = "view"
     RATING = "rating"
-    COMMENT = "comment"
 
 class InteractionBase(BaseModel):
     user_id: str
@@ -76,24 +75,13 @@ class Interaction(InteractionBase):
     class Config:
         from_attributes = True
 
-class SentimentBase(BaseModel):
-    user_id: str
-    content_id: str
-    user_comment: str
-
-class SentimentCreate(SentimentBase):
-    pass
-
-class Sentiment(SentimentBase):
-    sentiment_id: str
-    sentiment_score: float
-    created_at: datetime
-
-    class Config:
-        from_attributes = True
-
 class RecommendationQuery(BaseModel):
     user_text: str = Field(..., description="User's input text for content recommendation")
+    limit: Optional[int] = Field(10, description="Maximum number of recommendations to return")
+    include_external: Optional[bool] = Field(True, description="Whether to include content from external APIs")
+    min_sentiment: Optional[float] = Field(0.0, ge=0.0, le=1.0, description="Minimum sentiment score (0-1)")
+    max_sentiment: Optional[float] = Field(1.0, ge=0.0, le=1.0, description="Maximum sentiment score (0-1)")
+    content_types: Optional[List[str]] = Field(None, description="Filter by content types (e.g., ['video', 'article'])")
 
 class UserInteraction(BaseModel):
     """Represents a user's interaction with content"""
@@ -110,8 +98,17 @@ class RecommendationResponse(BaseModel):
     content_id: str
     title: str
     description: str
-    category: str
+    category: str = "general"
     match_score: float
+    source: str = "database"
+    url: Optional[str] = None
+    thumbnail: Optional[str] = None
+    type: str = "article"
+    sentiment: float = 0.5
+    tags: List[str] = []
+    created_at: Optional[str] = None
+    duration: Optional[str] = None
+    track_count: Optional[int] = None
 
 class Token(BaseModel):
     access_token: str

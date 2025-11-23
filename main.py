@@ -1,24 +1,31 @@
+import os
+import logging
+from pathlib import Path
+from dotenv import load_dotenv
+
+# Configure logging first
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Load environment variables
+env_path = Path(__file__).parent.parent / '.env'
+load_dotenv(dotenv_path=env_path, override=True)
+
+# Log environment status for debugging
+logger.info(f"Current working directory: {os.getcwd()}")
+logger.info(f"Environment file exists: {os.path.exists(env_path)}")
+logger.info(f"YOUTUBE_API_KEY exists: {'YOUTUBE_API_KEY' in os.environ}")
+
+# Now import other dependencies
 from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer
 import firebase_admin
 from firebase_admin import credentials, auth
-import logging
-from typing import List
-import os
-from dotenv import load_dotenv
 
 # Import API routers
 from api.endpoints import router as api_router
 from api.auth_endpoints import router as auth_router
-from api.content_endpoints import router as content_router
-
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-# Load environment variables
-load_dotenv()
 
 # Initialize Firebase Admin from environment variables
 if not firebase_admin._apps:
@@ -73,7 +80,6 @@ app.add_middleware(
 # Include API routers
 app.include_router(api_router)
 app.include_router(auth_router)
-app.include_router(content_router)
 
 # Security scheme for API documentation
 security = HTTPBearer()

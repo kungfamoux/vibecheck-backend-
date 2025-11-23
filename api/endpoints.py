@@ -12,9 +12,6 @@ from services.recommendation_engine import MoodBasedRecommender
 # Create an instance of the recommendation engine
 recommendation_engine = MoodBasedRecommender()
 
-# Initialize sample content on startup
-import asyncio
-asyncio.create_task(recommendation_engine.initialize_sample_content())
 
 from auth.auth_bearer import auth_scheme
 import logging
@@ -80,109 +77,20 @@ async def login(login_data: dict = Body(...)):
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-@router.post("/contents/{content_id}/comments", response_model=schemas.Sentiment, status_code=status.HTTP_201_CREATED)
-async def add_comment(
-    content_id: str,
-    comment_data: schemas.SentimentCreate
-):
-    """
-    Add a comment to content and analyze its sentiment
-    
-    - **content_id**: ID of the content to comment on
-    - **comment_data**: The comment text and metadata
-    
-    Returns the created comment with sentiment analysis
-    """
-    try:
-        from models.database import db
-        from datetime import datetime
-        
-        # Verify content exists
-        content_ref = db.collection("contents").document(content_id)
-        if not content_ref.get().exists:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Content with ID {content_id} not found"
-            )
-        
-        # Analyze the sentiment of the comment
-        sentiment_analysis = ml_service.analyze_content_feedback(comment_data.user_comment)
-        
-        # Create the comment document
-        comment_data = {
-            "user_id": current_user.uid,
-            "user_email": current_user.email,
-            "content_id": content_id,
-            "comment": comment_data.user_comment,
-            "sentiment_score": float(sentiment_analysis.get("sentiment_score", 0.0)),
-            "sentiment_label": sentiment_analysis.get("sentiment_label", "neutral"),
-            "created_at": datetime.utcnow().isoformat(),
-            "updated_at": datetime.utcnow().isoformat()
-        }
-        
-        # Save to Firestore
-        doc_ref = db.collection("comments").document()
-        doc_ref.set(comment_data)
-        
-        # Update content's comment count
-        content_ref.update({
-            "comment_count": firestore.Increment(1),
-            "updated_at": datetime.utcnow().isoformat()
-        })
-        
-        # Return the created comment with the generated ID
-        return {
-            "comment_id": doc_ref.id,
-            "content_id": content_id,
-            "user_id": current_user.uid,
-            "comment": comment_data["comment"],
-            "sentiment_score": comment_data["sentiment_score"],
-            "sentiment_label": comment_data["sentiment_label"],
-            "created_at": comment_data["created_at"]
-        }
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error adding comment: {str(e)}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An error occurred while adding the comment"
-        )
-
-@router.post("/init-content", status_code=status.HTTP_200_OK)
-async def initialize_sample_content():
-    """
-    Initialize sample content in the database.
-    This endpoint is for development purposes only.
-    """
-    try:
-        success = await recommendation_engine.initialize_sample_content()
-        if success:
-            return {"status": "success", "message": "Sample content initialized successfully"}
-        else:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to initialize sample content"
-            )
-    except Exception as e:
-        logger.error(f"Error initializing sample content: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(e)
-        )
-
 @router.post("/recommendations", response_model=List[schemas.RecommendationResponse])
 async def get_recommendations(
     query: schemas.RecommendationQuery
 ):
     """
-    Get content recommendations based on input text and preferences
+    Get content recommendations based on input text and preferences from social media platforms
     
     Request body should contain:
     - **user_text**: The input text to analyze for mood and preferences
+    - **limit**: (Optional) Maximum number of recommendations to return (default: 10, max: 20)
+    - **content_types**: (Optional) List of content types to include (e.g., ['video', 'playlist', 'track'])
+    - **platforms**: (Optional) List of platforms to include (e.g., ['youtube', 'spotify'])
     
-    Returns a list of recommended content items with match scores
+    Returns a list of recommended content items with match scores from social media platforms
     """
     try:
         if not query.user_text or not query.user_text.strip():
@@ -196,92 +104,109 @@ async def get_recommendations(
         # Analyze the user's text to get mood
         mood_result = ml_service.detect_mood(query.user_text)
         primary_mood = mood_result.get('primary_mood', 'neutral')
-        mood_tags = [primary_mood]
         
-        if not mood_tags:
-            # Default to some general tags if no specific mood is detected
-            mood_tags = ["general", "popular"]
+        # Set default values if not provided
+        limit = min(20, int(query.limit)) if hasattr(query, 'limit') and query.limit else 10
         
-        logger.info(f"Detected mood: {primary_mood}")
+        logger.info(f"Detected mood: {primary_mood}, fetching recommendations...")
         
-        # Ensure we have content loaded
-        await recommendation_engine._refresh_content_cache()
+        # Get recommendations based on mood from social media platforms
+        recommendations = await recommendation_engine.get_similar_mood_content(
+            mood=primary_mood,
+            top_n=limit
+        )
         
-        if not recommendation_engine.content_cache:
-            logger.warning("No content available in the database")
-            # Try to initialize sample content if none exists
-            await recommendation_engine.initialize_sample_content()
-            await recommendation_engine._refresh_content_cache()
-            
-            if not recommendation_engine.content_cache:
-                raise HTTPException(
-                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                    detail="No content available for recommendations"
-                )
+        if not recommendations:
+            # Fallback to general recommendations if no mood-specific content found
+            recommendations = await recommendation_engine.get_similar_mood_content(
+                mood="motivation",
+                top_n=limit
+            )
         
-        # Get all content and score based on mood match
-        all_content = list(recommendation_engine.content_cache.values())
+        if not recommendations:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="No matching content found. Please try a different mood or try again later."
+            )
         
-        # Score each content item based on mood match
-        scored_content = []
-        for content in all_content:
-            content_text = f"{content.get('title', '')} {content.get('description', '')}"
-            content_mood = ml_service.detect_mood(content_text)
-            content_primary_mood = content_mood.get('primary_mood', 'neutral')
-            
-            # Calculate match score (simple for now, can be enhanced)
-            mood_match = 1.0 if content_primary_mood == primary_mood else 0.5
-            
-            # Include sentiment in scoring
-            sentiment_score = content.get('sentiment', 0.5)  # Default to neutral if not set
-            
-            # Combine scores (weighted average)
-            score = (mood_match * 0.7) + (sentiment_score * 0.3)
-            
-            scored_content.append({
-                'content_id': content.get('id', ''),
-                'title': content.get('title', 'Untitled'),
-                'description': content.get('description', ''),
-                'category': content.get('category', 'general'),  # Default category if not set
-                'match_score': min(1.0, max(0.0, score))  # Ensure score is between 0 and 1
-            })
-        
-        # Sort by match_score (highest first) and take top 10
-        recommendations = sorted(
-            scored_content, 
-            key=lambda x: x['match_score'], 
-            reverse=True
-        )[:10]
-        
-        # Log the recommendation request
-        try:
-            import firebase_admin
-            from firebase_admin import db
-            from datetime import datetime
-            
-            if not firebase_admin._apps:
-                from utils.firebase_config import initialize_firebase
-                initialize_firebase()
+        # Apply content type and platform filters if specified
+        filtered_recommendations = []
+        for item in recommendations:
+            try:
+                # Skip if content type filter is specified and doesn't match
+                if hasattr(query, 'content_types') and query.content_types:
+                    item_type = item.get('type', '').lower()
+                    if item_type not in [t.lower() for t in query.content_types]:
+                        continue
                 
-            ref = db.reference('recommendation_requests')
-            ref.push({
-                "user_text": query.user_text,
-                "mood_tags": mood_tags,
-                "primary_mood": primary_mood,
-                "recommendation_count": len(recommendations),
-                "is_anonymous": True,
-                "created_at": datetime.utcnow().isoformat()
-            })
-        except Exception as e:
-            logger.warning(f"Failed to log recommendation request: {e}", exc_info=True)
+                # Skip if platform filter is specified and doesn't match
+                if hasattr(query, 'platforms') and query.platforms:
+                    item_source = item.get('source', '').lower()
+                    if item_source not in [p.lower() for p in query.platforms]:
+                        continue
+                
+                filtered_recommendations.append(item)
+            except Exception as e:
+                logger.error(f"Error filtering recommendation: {e}")
+                continue
         
-        return recommendations
+        # If no items match the filters, return the original recommendations
+        if not filtered_recommendations and (hasattr(query, 'content_types') or hasattr(query, 'platforms')):
+            filtered_recommendations = recommendations
         
-    except HTTPException as he:
-        logger.error(f"HTTP error in get_recommendations: {str(he)}")
+        # Format the response
+        formatted_recommendations = []
+        for item in filtered_recommendations[:limit]:  # Ensure we don't exceed the limit
+            try:
+                # Calculate match score percentage (0-100%)
+                match_score = min(100, max(0, int(item.get('match_score', 0.5) * 100)))
+                
+                # Base item structure
+                formatted_item = {
+                    'id': item.get('id', ''),
+                    'title': item.get('title', 'Untitled'),
+                    'description': item.get('description', ''),
+                    'match_score': match_score,
+                    'source': item.get('source', 'external'),
+                    'url': item.get('url', ''),
+                    'thumbnail': item.get('thumbnail') or item.get('image_url', ''),
+                    'type': item.get('type', 'content'),
+                    'mood': item.get('mood', primary_mood),
+                    'tags': item.get('tags', []),
+                    'created_at': item.get('created_at', datetime.now(timezone.utc).isoformat())
+                }
+                
+                # Add platform-specific metadata
+                if item.get('source') == 'youtube':
+                    formatted_item.update({
+                        'duration': item.get('duration'),
+                        'view_count': item.get('view_count'),
+                        'channel': item.get('channel')
+                    })
+                elif item.get('source') == 'spotify':
+                    formatted_item.update({
+                        'artists': item.get('artists', []),
+                        'album': item.get('album'),
+                        'duration_ms': item.get('duration_ms'),
+                        'preview_url': item.get('preview_url')
+                    })
+                    if item.get('type') == 'playlist':
+                        formatted_item['track_count'] = item.get('track_count')
+                
+                formatted_recommendations.append(formatted_item)
+                
+            except Exception as e:
+                logger.error(f"Error formatting recommendation: {e}")
+                continue
+        
+        # Sort by match score (highest first) and return
+        formatted_recommendations.sort(key=lambda x: x['match_score'], reverse=True)
+        return formatted_recommendations
+        
+    except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error in get_recommendations: {str(e)}", exc_info=True)
+        logger.error(f"Error in get_recommendations: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"An error occurred while generating recommendations: {str(e)}"
@@ -326,6 +251,7 @@ async def analyze_mood(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Error analyzing mood"
         )
+
 
 # Health check endpoint
 @router.get("/health", status_code=status.HTTP_200_OK)
